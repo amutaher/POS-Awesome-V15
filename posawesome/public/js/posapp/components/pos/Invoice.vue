@@ -1523,20 +1523,25 @@ export default {
 
     // Update invoice from order in backend
     update_invoice_from_order(doc) {
-      var vm = this;
-      frappe.call({
-        method: "posawesome.posawesome.api.posapp.update_invoice_from_order",
-        args: {
-          data: doc,
-        },
-        async: false,
-        callback: function (r) {
-          if (r.message) {
-            vm.invoice_doc = r.message;
+      return new Promise((resolve, reject) => {
+        frappe.call({
+          method: "posawesome.posawesome.api.posapp.update_invoice_from_order",
+          args: {
+            data: doc,
+          },
+          callback: (r) => {
+            if (r.message) {
+              this.invoice_doc = r.message;
+              resolve(r.message);
+            } else {
+              reject(new Error("Failed to update invoice from order"));
+            }
+          },
+          error: (err) => {
+            reject(err);
           }
-        },
+        });
       });
-      return this.invoice_doc;
     },
 
     // Process and save invoice (handles update or create)
@@ -1579,13 +1584,27 @@ export default {
 
     // Process and save invoice from order
     async process_invoice_from_order() {
-      const doc = await this.get_invoice_from_order_doc();
-      var up_invoice;
-      if (doc.name) {
-        up_invoice = await this.update_invoice_from_order(doc);
-        return up_invoice;
-      } else {
-        return this.update_invoice_from_order(doc);
+      try {
+        const doc = await this.get_invoice_from_order_doc();
+        if (!doc) {
+          throw new Error("Failed to get invoice from order");
+        }
+        
+        let invoice_doc;
+        if (doc.name) {
+          invoice_doc = await this.update_invoice_from_order(doc);
+        } else {
+          invoice_doc = await this.update_invoice_from_order(doc);
+        }
+        
+        return invoice_doc;
+      } catch (error) {
+        console.error("Error processing invoice from order:", error);
+        this.eventBus.emit("show_message", {
+          title: __("Error processing order: ") + (error.message || "Unknown error"),
+          color: "error"
+        });
+        return null;
       }
     },
 
