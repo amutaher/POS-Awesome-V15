@@ -35,7 +35,8 @@ const API_ROUTES_TO_CACHE = [
   '/api/method/posawesome.posawesome.api.posapp.get_delivery_charges',
   '/api/method/posawesome.posawesome.api.posapp.get_customer_addresses',
   '/api/method/posawesome.posawesome.api.posapp.get_customer_info',
-  '/api/method/posawesome.posawesome.api.customer.get_customer_balance'
+  '/api/method/posawesome.posawesome.api.customer.get_customer_balance',
+  '/api/method/posawesome.posawesome.api.posapp.check_opening_shift'
 ];
 
 // Install event - caches assets for offline use
