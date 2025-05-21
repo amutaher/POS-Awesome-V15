@@ -2291,9 +2291,14 @@ def get_app_info() -> Dict[str, List[Dict[str, str]]]:
     return {"apps": apps_info}
 
 @frappe.whitelist()
-def get_customers(pos_profile):
+def get_customers(pos_profile=None):
     """Get list of customers for the POS interface"""
     try:
+        # If no pos_profile provided, create a default empty one
+        if not pos_profile:
+            _pos_profile = {"posa_use_server_cache": False}
+            return get_customer_names(json.dumps(_pos_profile))
+            
         # Check if pos_profile is a string that needs to be parsed as JSON
         if isinstance(pos_profile, str):
             try:
