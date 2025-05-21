@@ -26,7 +26,19 @@
 
     <!-- Main Invoice Card (contains all invoice content) -->
     <v-card style="max-height: 70vh; height: 70vh"
-      :class="['cards my-0 py-0 mt-3 bg-grey-lighten-5', { 'return-mode': invoiceType === 'Return' }]">
+      :class="['cards my-0 py-0 mt-3 bg-grey-lighten-5', { 'return-mode': invoiceType === 'Return' }, { 'offline-mode': isOffline }]">
+      <!-- Offline Mode Indicator - Only shown when offline -->
+      <v-alert
+        v-if="isOffline"
+        density="compact"
+        type="warning"
+        variant="tonal"
+        icon="mdi-wifi-off"
+        class="ma-1 pa-1"
+      >
+        {{ __('You are working offline. This invoice will be queued for submission when you reconnect.') }}
+      </v-alert>
+      
       <!-- Top Row: Customer Selection and Invoice Type -->
       <v-row align="center" class="items px-2 py-1">
         <v-col :cols="pos_profile.posa_allow_sales_order ? 9 : 12" class="pb-2 pr-0">
@@ -439,6 +451,7 @@
 
 import format from "../../format";
 import Customer from "./Customer.vue";
+import networkDetector from '../../services/networkDetector';
 
 export default {
   mixins: [format],
@@ -495,6 +508,11 @@ export default {
       selected_currency: "", // Currently selected currency
       exchange_rate: 1, // Current exchange rate
       available_currencies: [], // List of available currencies
+      isOffline: false, // Track offline status 
+      offlineStorage: null, // Reference to offlineStorage instance
+      offlineDataStatus: null, // Status of offline data availability
+      lastOfflineInvoiceId: null, // ID of last offline invoice
+      unsubscribeNetwork: null, // Unsubscribe function for network detector
     };
   },
 
@@ -1579,9 +1597,55 @@ export default {
           invoiceType: this.invoiceType,
           is_return: this.invoice_doc ? this.invoice_doc.is_return : false,
           items_count: this.items.length,
-          customer: this.customer
+          customer: this.customer,
+          isOffline: this.isOffline
         });
 
+        // Check if we're offline
+        if (this.isOffline) {
+          console.log('Device is offline, will save invoice locally');
+          
+          // Check if offline data is available
+          if (!this.offlineDataStatus || !this.offlineDataStatus.isReady) {
+            this.eventBus.emit('show_message', {
+              title: __('Cannot create offline invoice: Required data not available offline'),
+              color: 'error'
+            });
+            return;
+          }
+          
+          // Basic validations still apply in offline mode
+          if (!this.customer) {
+            this.eventBus.emit("show_message", {
+              title: __(`Select a customer`),
+              color: "error",
+            });
+            return;
+          }
+
+          if (!this.items.length) {
+            this.eventBus.emit("show_message", {
+              title: __(`Select items to sell`),
+              color: "error",
+            });
+            return;
+          }
+
+          // Perform basic validation (limited in offline mode)
+          const isValid = this.validate();
+          if (!isValid) {
+            return;
+          }
+          
+          // Show confirmation dialog for offline saving
+          if (confirm(__('You are offline. Save this invoice for syncing later?'))) {
+            await this.saveInvoiceOffline();
+          }
+          
+          return;
+        }
+
+        // Normal online flow (existing code)
         if (!this.customer) {
           console.log('Customer validation failed');
           this.eventBus.emit("show_message", {
@@ -4072,6 +4136,122 @@ export default {
       this.calc_stock_qty(item, item.qty);
       this.$forceUpdate();
     },
+
+    // Initialize offline detection
+    initOfflineDetection() {
+      // Initial offline status
+      this.isOffline = !networkDetector.checkOnlineStatus();
+      
+      // Subscribe to network status changes
+      this.unsubscribeNetwork = networkDetector.onStatusChange(status => {
+        this.isOffline = !status.isOnline;
+        
+        // If coming back online and we have a last offline invoice ID
+        if (status.isOnline && this.lastOfflineInvoiceId) {
+          this.checkOfflineInvoiceSyncStatus();
+        }
+      });
+    },
+    
+    // Initialize offline storage
+    async initOfflineStorage() {
+      // Use global offlineStorage instance if available
+      if (window.offlineStorage) {
+        this.offlineStorage = window.offlineStorage;
+      } else {
+        // Otherwise create a new instance
+        try {
+          const OfflineStorage = (await import('../../services/offlineStorage.js')).default;
+          this.offlineStorage = new OfflineStorage('posAwesomeDB', 1);
+          await this.offlineStorage.init();
+        } catch (error) {
+          console.error('Failed to initialize offline storage:', error);
+        }
+      }
+      
+      // Check if offline data is available
+      if (this.offlineStorage) {
+        this.offlineDataStatus = await this.offlineStorage.checkOfflineDataAvailability();
+        console.log('Offline data status:', this.offlineDataStatus);
+      }
+    },
+    
+    // Check sync status of previously saved offline invoice
+    async checkOfflineInvoiceSyncStatus() {
+      if (!this.offlineStorage || !this.lastOfflineInvoiceId) return;
+      
+      try {
+        // Try to get the offline invoice by ID
+        const invoice = await this.offlineStorage.getData('pendingInvoices', this.lastOfflineInvoiceId);
+        
+        // If invoice still exists and is pending, it hasn't synced yet
+        if (invoice && invoice.status === 'pending') {
+          // Show message that sync is in progress
+          this.eventBus.emit('show_message', {
+            title: __('Your offline invoice is syncing...'),
+            color: 'info'
+          });
+        } else {
+          // Invoice no longer exists or has been synced
+          this.lastOfflineInvoiceId = null;
+        }
+      } catch (error) {
+        console.error('Error checking offline invoice sync status:', error);
+      }
+    },
+    
+    // Save invoice to offline storage when network is unavailable
+    async saveInvoiceOffline() {
+      if (!this.offlineStorage) {
+        this.eventBus.emit('show_message', {
+          title: __('Cannot save offline: Offline storage not initialized'),
+          color: 'error'
+        });
+        return false;
+      }
+      
+      try {
+        // Prepare invoice document
+        console.log('Preparing invoice for offline storage');
+        let invoiceDoc = this.invoiceType === 'Order'
+          ? await this.get_invoice_from_order_doc()
+          : this.process_invoice();
+        
+        if (!invoiceDoc) {
+          console.error('Failed to create invoice document for offline storage');
+          return false;
+        }
+        
+        // Add metadata for offline handling
+        invoiceDoc.offline_saved = true;
+        invoiceDoc.offline_timestamp = new Date().toISOString();
+        
+        // Queue the invoice for submission when back online
+        console.log('Queuing invoice for offline submission');
+        const result = await this.offlineStorage.queuePendingInvoice(invoiceDoc);
+        
+        // Set last offline invoice ID for tracking
+        this.lastOfflineInvoiceId = result;
+        
+        // Show success message
+        this.eventBus.emit('show_message', {
+          title: __('Invoice saved offline. It will be submitted when you reconnect.'),
+          color: 'success'
+        });
+        
+        // Clear the current invoice
+        this.eventBus.emit('clear_invoice');
+        
+        return true;
+      } catch (error) {
+        console.error('Error saving invoice offline:', error);
+        this.eventBus.emit('show_message', {
+          title: __('Failed to save invoice offline: ') + (error.message || 'Unknown error'),
+          color: 'error'
+        });
+        return false;
+      }
+    },
   },
 
   mounted() {
@@ -4189,6 +4369,12 @@ export default {
     this.eventBus.on("reset_posting_date", () => {
       this.posting_date = frappe.datetime.nowdate();
     });
+    
+    // Initialize offline detection
+    this.initOfflineDetection();
+    
+    // Initialize offline storage reference
+    this.initOfflineStorage();
   },
   // Cleanup event listeners before component is destroyed
   beforeUnmount() {
@@ -4200,6 +4386,13 @@ export default {
     this.eventBus.off("clear_invoice");
     // Cleanup reset_posting_date listener
     this.eventBus.off("reset_posting_date");
+    
+    // Clean up any additional resources if needed
+    
+    // Clean up network status subscription
+    if (this.unsubscribeNetwork) {
+      this.unsubscribeNetwork();
+    }
   },
   // Register global keyboard shortcuts when component is created
   created() {
@@ -4294,6 +4487,9 @@ export default {
     },
   },
 };
+
+// Store original lifecycle hooks if needed
+// This section is not needed as we're adding to the existing mounted and beforeUnmount methods
 </script>
 
 <style scoped>
@@ -4385,6 +4581,26 @@ export default {
   right: 0;
   background-color: #ff5252;
   color: white;
+  padding: 4px 12px;
+  font-weight: bold;
+  border-bottom-left-radius: 8px;
+  z-index: 1;
+}
+
+/* Amber border and label for offline mode card */
+.offline-mode {
+  border: 2px solid #ffc107 !important;
+  position: relative;
+}
+
+/* Label for offline mode card */
+.offline-mode::before {
+  content: 'OFFLINE';
+  position: absolute;
+  top: 0;
+  right: 0;
+  background-color: #ffc107;
+  color: #212121;
   padding: 4px 12px;
   font-weight: bold;
   border-bottom-left-radius: 8px;
