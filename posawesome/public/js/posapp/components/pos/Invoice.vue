@@ -1042,7 +1042,9 @@ export default {
       
       // Handle offline case
       if (!navigator.onLine && this.offlineStorage) {
-        const offlineSaved = await this.saveInvoiceOffline(doc);
+        // Ensure doc is properly stringified for offline storage
+        const docToSave = JSON.parse(JSON.stringify(doc));
+        const offlineSaved = await this.saveInvoiceOffline(docToSave);
         if (offlineSaved) {
           this.clear_invoice();
           return doc;
@@ -1087,10 +1089,39 @@ export default {
               timeout: 5000
             });
           }
+          
+          // Register monkeypatched API methods to ensure JSON formatting
+          this.monkeyPatchFrappeAPIs();
         }
       } catch (error) {
         console.error("Error initializing offline storage:", error);
       }
+    },
+    
+    // Monkeypatch frappe.call to ensure pos_profile is always JSON
+    monkeyPatchFrappeAPIs() {
+      const originalCall = frappe.call;
+      frappe.call = (opts) => {
+        // Check if this is a POS API call
+        if (opts && opts.method && opts.method.startsWith('posawesome.posawesome.api')) {
+          // Ensure args exist
+          opts.args = opts.args || {};
+          
+          // If pos_profile exists and is a string, convert to JSON
+          if (opts.args.pos_profile && typeof opts.args.pos_profile === 'string') {
+            try {
+              // Try parsing it first to see if it's already JSON
+              JSON.parse(opts.args.pos_profile);
+            } catch (e) {
+              // If it fails to parse, it's a string that needs to be JSON
+              const profileObj = { name: opts.args.pos_profile };
+              opts.args.pos_profile = JSON.stringify(profileObj);
+              console.log('Converted pos_profile string to JSON:', opts.args.pos_profile);
+            }
+          }
+        }
+        return originalCall.call(frappe, opts);
+      };
     },
     
     // Handle online/offline status changes

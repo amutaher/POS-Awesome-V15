@@ -389,10 +389,26 @@ export default class OfflineStorage {
           invoice.sync_attempts += 1;
           await this.saveData('pendingInvoices', invoice);
           
+          // Make sure invoice data is properly formatted 
+          let invoiceData = invoice.invoice_data;
+          
+          // Ensure pos_profile is properly formatted as JSON
+          if (invoiceData.pos_profile && typeof invoiceData.pos_profile === 'string') {
+            try {
+              // Try parsing it first to see if it's already JSON
+              JSON.parse(invoiceData.pos_profile);
+            } catch (e) {
+              // If it fails to parse, it's a string that needs to be JSON
+              const profileObj = { name: invoiceData.pos_profile };
+              invoiceData.pos_profile = JSON.stringify(profileObj);
+              console.log('Fixed pos_profile format for sync');
+            }
+          }
+          
           // Submit invoice to server using frappe.call
           const result = await frappe.call({
             method: 'posawesome.posawesome.api.posapp.submit_invoice',
-            args: { invoice: invoice.invoice_data },
+            args: { invoice: invoiceData },
             freeze: false
           });
           
