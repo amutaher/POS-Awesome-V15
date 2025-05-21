@@ -401,11 +401,12 @@ export default {
       
       this.eventBus.on('show_payment', (data) => {
         try {
+          console.log('Received show_payment event:', data);
           this.payment = data === 'true';
-          this.offers = false;
-          this.coupons = false;
+          console.log('Payment component visibility set to:', this.payment);
         } catch (error) {
           console.error('Error handling show_payment event:', error);
+          this.payment = false;
         }
       });
       
@@ -442,6 +443,17 @@ export default {
             console.error('Error queueing invoice:', err);
             this.showSyncStatus('Failed to save invoice for later sync', 'error');
           });
+        }
+      });
+      
+      // Listen for invoice doc payment events
+      this.eventBus.on('send_invoice_doc_payment', (data) => {
+        try {
+          console.log('Received invoice doc for payment:', data);
+          // Store the invoice doc for payment processing
+          this.invoice_doc = data;
+        } catch (error) {
+          console.error('Error handling invoice doc payment event:', error);
         }
       });
     });
