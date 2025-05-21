@@ -134,7 +134,21 @@ def update_opening_shift_data(data, pos_profile):
 def get_items(
     pos_profile, price_list=None, item_group="", search_value="", customer=None
 ):
-    _pos_profile = json.loads(pos_profile)
+    try:
+        # Check if pos_profile is a string that needs to be parsed as JSON
+        if isinstance(pos_profile, str):
+            try:
+                _pos_profile = json.loads(pos_profile)
+            except json.JSONDecodeError:
+                # If it's not valid JSON, assume it's a profile name
+                _pos_profile = frappe.get_doc("POS Profile", pos_profile)
+                _pos_profile = _pos_profile.as_dict()
+        else:
+            _pos_profile = pos_profile
+    except Exception as e:
+        frappe.log_error(f"Error processing pos_profile in get_items: {str(e)}", "POS Awesome")
+        return {"error": str(e)}
+
     use_price_list = _pos_profile.get("posa_use_server_cache")
 
     @redis_cache(ttl=60)
@@ -142,7 +156,17 @@ def get_items(
         return _get_items(pos_profile, price_list, item_group, search_value, customer)
 
     def _get_items(pos_profile, price_list, item_group, search_value, customer=None):
-        pos_profile = json.loads(pos_profile)
+        try:
+            # Make sure pos_profile is properly parsed
+            if isinstance(pos_profile, str):
+                try:
+                    pos_profile = json.loads(pos_profile)
+                except json.JSONDecodeError:
+                    pos_profile = frappe.get_doc("POS Profile", pos_profile).as_dict()
+        except Exception as e:
+            frappe.log_error(f"Error in _get_items: {str(e)}", "POS Awesome")
+            return {"error": str(e)}
+            
         condition = ""
         
         # Clear quantity cache to ensure fresh values on each search
@@ -2265,3 +2289,24 @@ def get_app_info() -> Dict[str, List[Dict[str, str]]]:
     ]
 
     return {"apps": apps_info}
+
+@frappe.whitelist()
+def get_customers(pos_profile):
+    """Get list of customers for the POS interface"""
+    try:
+        # Check if pos_profile is a string that needs to be parsed as JSON
+        if isinstance(pos_profile, str):
+            try:
+                _pos_profile = json.loads(pos_profile)
+            except json.JSONDecodeError:
+                # If it's not valid JSON, assume it's a profile name
+                _pos_profile = frappe.get_doc("POS Profile", pos_profile)
+                _pos_profile = _pos_profile.as_dict()
+        else:
+            _pos_profile = pos_profile
+    except Exception as e:
+        frappe.log_error(f"Error processing pos_profile in get_customers: {str(e)}", "POS Awesome")
+        return {"error": str(e)}
+
+    # Use existing get_customer_names function which has the same functionality
+    return get_customer_names(json.dumps(_pos_profile))
