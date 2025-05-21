@@ -219,14 +219,25 @@ export default {
           .then(profiles => {
             if (profiles && profiles.length > 0) {
               this.pos_profile = profiles[0];
-              this.eventBus.emit('register_pos_profile', {
-                pos_profile: profiles[0],
-                pos_opening_shift: 'offline-shift'
-              });
-              this.eventBus.emit('set_company', profiles[0].company);
+              // Ensure profile is properly initialized before emitting
+              if (this.pos_profile && this.pos_profile.payments) {
+                this.eventBus.emit('register_pos_profile', {
+                  pos_profile: this.pos_profile,
+                  pos_opening_shift: 'offline-shift'
+                });
+                this.eventBus.emit('set_company', this.pos_profile.company);
+                console.log('Offline POS profile initialized:', this.pos_profile.name);
+              } else {
+                console.error('Invalid offline POS profile data');
+                this.create_opening_voucher();
+              }
             } else {
               this.create_opening_voucher();
             }
+          })
+          .catch(error => {
+            console.error('Error loading offline POS profile:', error);
+            this.create_opening_voucher();
           });
       }
       
@@ -236,26 +247,37 @@ export default {
           user: frappe.session.user,
         })
         .then((r) => {
-          if (r.message) {
+          if (r.message && r.message.pos_profile) {
             this.pos_profile = r.message.pos_profile;
             this.pos_opening_shift = r.message.pos_opening_shift;
-            this.get_offers(this.pos_profile.name);
-            this.eventBus.emit('register_pos_profile', r.message);
-            this.eventBus.emit('set_company', r.message.company);
-            frappe.realtime.emit('pos_profile_registered');
-            console.info('LoadPosProfile');
             
-            // Cache POS profile for offline use
-            if (this.offlineStorage) {
-              this.offlineStorage.cachePosProfile(r.message.pos_profile);
+            // Ensure profile is properly initialized before proceeding
+            if (this.pos_profile && this.pos_profile.payments) {
+              this.get_offers(this.pos_profile.name);
+              this.eventBus.emit('register_pos_profile', r.message);
+              this.eventBus.emit('set_company', r.message.company);
+              frappe.realtime.emit('pos_profile_registered');
+              console.info('Online POS profile initialized:', this.pos_profile.name);
               
-              // Cache items and customers for offline use
-              this.cacheItemsForOffline();
-              this.cacheCustomersForOffline();
+              // Cache POS profile for offline use
+              if (this.offlineStorage) {
+                this.offlineStorage.cachePosProfile(r.message.pos_profile);
+                
+                // Cache items and customers for offline use
+                this.cacheItemsForOffline();
+                this.cacheCustomersForOffline();
+              }
+            } else {
+              console.error('Invalid online POS profile data');
+              this.create_opening_voucher();
             }
           } else {
             this.create_opening_voucher();
           }
+        })
+        .catch(error => {
+          console.error('Error checking opening shift:', error);
+          this.create_opening_voucher();
         });
     },
     

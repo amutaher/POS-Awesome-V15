@@ -446,7 +446,7 @@ export default {
   data() {
     return {
       // POS profile settings
-      pos_profile: "",
+      pos_profile: null, // Changed from empty string to null for better type checking
       pos_opening_shift: "",
       stock_settings: "",
       invoice_doc: "",
@@ -496,6 +496,7 @@ export default {
       selected_currency: "", // Currently selected currency
       exchange_rate: 1, // Current exchange rate
       available_currencies: [], // List of available currencies
+      is_profile_initialized: false, // Track if profile is initialized
     };
   },
 
@@ -1430,6 +1431,13 @@ export default {
     // Prepare payments array for invoice doc
     get_payments() {
       const payments = [];
+      
+      // Check if profile is ready
+      if (!this.isProfileReady()) {
+        console.warn('POS profile not ready for payments');
+        return payments;
+      }
+      
       // Use this.subtotal which is already in selected currency and includes all calculations
       const total_amount = this.subtotal;
       let remaining_amount = total_amount;
@@ -1443,17 +1451,13 @@ export default {
           -Math.abs(payment_amount) : payment_amount;
         
         // Handle currency conversion
-        // If selected_currency is USD and base is PKR:
-        // amount is in USD (e.g. 10 USD)
-        // base_amount should be in PKR (e.g. 3000 PKR)
-        // So multiply by exchange rate to get base_amount
         const base_amount = this.selected_currency !== this.pos_profile.currency ? 
           this.flt(adjusted_amount * (this.exchange_rate || 1), this.currency_precision) : 
           adjusted_amount;
         
         payments.push({
-          amount: adjusted_amount,  // Keep in selected currency (e.g. USD)
-          base_amount: base_amount,  // Convert to base currency (e.g. PKR)
+          amount: adjusted_amount,
+          base_amount: base_amount,
           mode_of_payment: payment.mode_of_payment,
           default: payment.default,
           account: payment.account || "",
@@ -4140,35 +4144,20 @@ export default {
         this.show_payment();
       }
     },
+
+    // Add a method to check if profile is ready
+    isProfileReady() {
+      return this.is_profile_initialized && this.pos_profile && this.pos_profile.payments;
+    },
   },
 
   mounted() {
     // Register event listeners for POS profile, items, customer, offers, etc.
     this.eventBus.on("register_pos_profile", (data) => {
-      this.pos_profile = data.pos_profile;
-      this.customer = data.pos_profile.customer;
-      this.pos_opening_shift = data.pos_opening_shift;
-      this.stock_settings = data.stock_settings;
-      // Increase precision for better handling of small amounts
-      this.float_precision = 6;  // Changed from 2 to 6
-      this.currency_precision = 6;  // Changed from 2 to 6
-      this.invoiceType = this.pos_profile.posa_default_sales_order
-        ? "Order"
-        : "Invoice";
-
-      // Add this block to handle currency initialization
-      if (this.pos_profile.posa_allow_multi_currency) {
-        this.fetch_available_currencies().then(() => {
-          // Set default currency after currencies are loaded
-          this.selected_currency = this.pos_profile.currency;
-          this.exchange_rate = 1;
-        }).catch(error => {
-          console.error("Error initializing currencies:", error);
-          this.eventBus.emit("show_message", {
-            title: __("Error loading currencies"),
-            color: "error"
-          });
-        });
+      if (data && data.pos_profile) {
+        this.pos_profile = data.pos_profile;
+        this.is_profile_initialized = true;
+        console.log('POS profile initialized:', this.pos_profile.name);
       }
     });
     this.eventBus.on("add_item", (item) => {
