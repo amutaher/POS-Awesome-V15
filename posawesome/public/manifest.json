@@ -8,7 +8,7 @@
   "theme_color": "#0097A7",
   "icons": [
     {
-      "src": "/assets/posawesome/js/posapp/components/pos/pos.png",
+      "src": "/assets/posawesome/icons/icon-72x72.png",
       "sizes": "72x72",
       "type": "image/png"
     },
@@ -27,5 +27,22 @@
       "sizes": "512x512",
       "type": "image/png"
     }
-  ]
+  ],
+  "screenshots": [
+    {
+      "src": "/assets/posawesome/images/screenshot-mobile.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "narrow"
+    },
+    {
+      "src": "/assets/posawesome/images/screenshot-desktop.png",
+      "sizes": "1280x800",
+      "type": "image/png",
+      "form_factor": "wide"
+    }
+  ],
+  "id": "posawesome",
+  "scope": "/",
+  "orientation": "any"
 } 
