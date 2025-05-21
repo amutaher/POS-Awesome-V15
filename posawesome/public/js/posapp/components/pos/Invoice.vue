@@ -23,7 +23,7 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
-    
+
     <!-- Offline Alert Notification -->
     <v-alert
       v-if="!isOnline"
@@ -1042,9 +1042,7 @@ export default {
       
       // Handle offline case
       if (!navigator.onLine && this.offlineStorage) {
-        // Ensure doc is properly stringified for offline storage
-        const docToSave = JSON.parse(JSON.stringify(doc));
-        const offlineSaved = await this.saveInvoiceOffline(docToSave);
+        const offlineSaved = await this.saveInvoiceOffline(doc);
         if (offlineSaved) {
           this.clear_invoice();
           return doc;
@@ -1057,13 +1055,13 @@ export default {
         success = this.update_invoice(doc);
       } else {
         success = this.update_invoice(doc);
-      }
+        }
       
       if (!success) {
-        this.eventBus.emit("show_message", {
+          this.eventBus.emit("show_message", {
           title: "Error saving the current invoice",
-          color: "error",
-        });
+            color: "error",
+          });
         return null;
       }
       
@@ -1089,39 +1087,10 @@ export default {
               timeout: 5000
             });
           }
-          
-          // Register monkeypatched API methods to ensure JSON formatting
-          this.monkeyPatchFrappeAPIs();
         }
       } catch (error) {
         console.error("Error initializing offline storage:", error);
       }
-    },
-    
-    // Monkeypatch frappe.call to ensure pos_profile is always JSON
-    monkeyPatchFrappeAPIs() {
-      const originalCall = frappe.call;
-      frappe.call = (opts) => {
-        // Check if this is a POS API call
-        if (opts && opts.method && opts.method.startsWith('posawesome.posawesome.api')) {
-          // Ensure args exist
-          opts.args = opts.args || {};
-          
-          // If pos_profile exists and is a string, convert to JSON
-          if (opts.args.pos_profile && typeof opts.args.pos_profile === 'string') {
-            try {
-              // Try parsing it first to see if it's already JSON
-              JSON.parse(opts.args.pos_profile);
-            } catch (e) {
-              // If it fails to parse, it's a string that needs to be JSON
-              const profileObj = { name: opts.args.pos_profile };
-              opts.args.pos_profile = JSON.stringify(profileObj);
-              console.log('Converted pos_profile string to JSON:', opts.args.pos_profile);
-            }
-          }
-        }
-        return originalCall.call(frappe, opts);
-      };
     },
     
     // Handle online/offline status changes
@@ -1733,13 +1702,13 @@ export default {
     // Show payment dialog - Enhanced for offline support
     show_payment() {
       if (!this.items.length) {
-        this.eventBus.emit("show_message", {
+          this.eventBus.emit("show_message", {
           title: "Please add items to the invoice",
-          color: "error",
-        });
-        return;
-      }
-      
+            color: "error",
+          });
+          return;
+        }
+
       // If offline and using offline storage, handle appropriately
       if (!navigator.onLine && this.offlineStorage) {
         if (this.invoiceType === "Return") {
@@ -1750,7 +1719,7 @@ export default {
           });
           return;
         }
-        
+
         // For regular invoices, save as draft and notify user
         this.eventBus.emit("show_message", {
           title: "You're offline. Invoice will be saved as draft.",
@@ -1762,9 +1731,9 @@ export default {
         setTimeout(() => {
           this.save_and_clear_invoice();
         }, 1500);
-        return;
-      }
-      
+          return;
+        }
+
       // Original online functionality
       this.eventBus.emit("show_payments", {
         subtotal: this.subtotal,

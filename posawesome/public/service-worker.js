@@ -23,20 +23,19 @@ const ASSETS_TO_CACHE = [
   'https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900'
 ];
 
-// API endpoints to cache for offline use - corrected for v15.2.3
+// API endpoints to cache for offline use
 const API_ROUTES_TO_CACHE = [
   '/api/method/posawesome.posawesome.api.posapp.get_items',
-  '/api/method/posawesome.posawesome.api.posapp.get_customer_names',
+  '/api/method/posawesome.posawesome.api.posapp.get_customers',
   '/api/method/posawesome.posawesome.api.posapp.get_pos_profile',
+  '/api/method/posawesome.posawesome.api.posapp.get_customer_details',
+  '/api/method/posawesome.posawesome.api.posapp.get_offers',
   '/api/method/posawesome.posawesome.api.posapp.get_item_details',
   '/api/method/posawesome.posawesome.api.posapp.get_item_group_suggestion',
   '/api/method/posawesome.posawesome.api.posapp.get_items_details',
   '/api/method/posawesome.posawesome.api.posapp.get_items_groups',
   '/api/method/posawesome.posawesome.api.posapp.get_delivery_charges',
-  '/api/method/posawesome.posawesome.api.posapp.get_customer_addresses',
-  '/api/method/posawesome.posawesome.api.posapp.get_customer_info',
-  '/api/method/posawesome.posawesome.api.customer.get_customer_balance',
-  '/api/method/posawesome.posawesome.api.posapp.check_opening_shift'
+  '/api/method/posawesome.posawesome.api.posapp.get_customer_addresses'
 ];
 
 // Install event - caches assets for offline use
