@@ -22,16 +22,76 @@ frappe.pages['posapp'].on_page_load = function (wrapper) {
 	$("head").append("<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/@mdi/font@6.x/css/materialdesignicons.min.css'>");
 	$("head").append("<link rel='stylesheet' href='https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900' />");
 	
-	// Register Service Worker
+	// Register Service Worker for offline functionality
 	if ('serviceWorker' in navigator) {
 		window.addEventListener('load', () => {
 			navigator.serviceWorker.register('/assets/posawesome/service-worker.js')
 				.then((registration) => {
 					console.log('Service Worker registered with scope:', registration.scope);
+					
+					// Setup periodic sync if available
+					if ('periodicSync' in registration) {
+						// Try to register periodic sync with tag and minimum interval
+						registration.periodicSync.register('sync-pos-data', {
+							minInterval: 24 * 60 * 60 * 1000 // One day in ms
+						}).then(() => {
+							console.log('Periodic sync registered successfully');
+						}).catch((err) => {
+							console.log('Periodic sync registration failed:', err);
+						});
+					}
 				})
 				.catch((error) => {
 					console.error('Service Worker registration failed:', error);
 				});
+				
+			// Initialize global offlineStorage instance if it doesn't exist
+			// This will be available to all Vue components
+			if (!window.offlineStorage) {
+				import('/assets/posawesome/js/posapp/services/offlineStorage.js')
+					.then((module) => {
+						const OfflineStorage = module.default;
+						window.offlineStorage = new OfflineStorage('posAwesomeDB', 1);
+						window.offlineStorage.init().catch(err => {
+							console.error('Failed to initialize offline storage:', err);
+						});
+					})
+					.catch(err => {
+						console.error('Failed to load offline storage module:', err);
+					});
+			}
+			
+			// Create a fallback function to detect connectivity issues
+			window.checkConnectivity = function() {
+				return new Promise((resolve) => {
+					const timeoutId = setTimeout(() => {
+						// If fetch doesn't complete in 5 seconds, assume offline
+						resolve(false);
+					}, 5000);
+					
+					fetch('/api/method/ping', {
+						method: 'GET',
+						cache: 'no-store',
+						headers: { 'pragma': 'no-cache' }
+					})
+					.then(response => {
+						clearTimeout(timeoutId);
+						resolve(response.ok);
+					})
+					.catch(() => {
+						clearTimeout(timeoutId);
+						resolve(false);
+					});
+				});
+			};
+			
+			// Listen for online/offline events
+			window.addEventListener('online', () => {
+				// When coming back online, try to sync data
+				if (window.offlineStorage) {
+					window.offlineStorage.triggerSync();
+				}
+			});
 		});
 	}
 
@@ -179,5 +239,17 @@ if (frappe.boot.lang == "pt") {
 		"Use Customer Credit": "Usar Crédito Cliente",
 		"Is Credit Sale": "É Venda a Crédito",
 		"Due Date": "Data de Expiração",
+		// Add new translations for offline features
+		"You are offline. Some features may be limited.": "Você está offline. Algumas funções podem estar limitadas.",
+		"pending invoice": "fatura pendente",
+		"pending invoices": "faturas pendentes",
+		"Synchronizing offline data...": "Sincronizando dados offline...",
+		"All offline data has been synchronized": "Todos os dados offline foram sincronizados",
+		"Failed Invoices": "Faturas com Falha",
+		"The following invoices could not be synchronized:": "As seguintes faturas não puderam ser sincronizadas:",
+		"Invoice": "Fatura",
+		"Error": "Erro",
+		"Unknown error": "Erro desconhecido",
+		"Retry All": "Tentar Novamente Todos"
 	});
 }
