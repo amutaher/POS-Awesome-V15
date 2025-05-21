@@ -423,10 +423,9 @@
               </v-btn>
             </v-col>
             <v-col cols="12">
-              <v-btn block color="success" theme="dark" size="x-large" height="60" prepend-icon="mdi-credit-card"
-                @click="show_payment" class="pay-button text-h5 font-weight-bold">
+              <v-btn block color="success" theme="dark" size="large" prepend-icon="mdi-credit-card"
+                @click="show_payment">
                 {{ __("PAY") }}
-                <span v-if="subtotal > 0" class="ml-2">({{ formatCurrency(subtotal) }} {{ currencySymbol(displayCurrency) }})</span>
               </v-btn>
             </v-col>
           </v-row>
@@ -446,7 +445,7 @@ export default {
   data() {
     return {
       // POS profile settings
-      pos_profile: null, // Changed from empty string to null for better type checking
+      pos_profile: "",
       pos_opening_shift: "",
       stock_settings: "",
       invoice_doc: "",
@@ -496,7 +495,6 @@ export default {
       selected_currency: "", // Currently selected currency
       exchange_rate: 1, // Current exchange rate
       available_currencies: [], // List of available currencies
-      is_profile_initialized: false, // Track if profile is initialized
     };
   },
 
@@ -1431,13 +1429,6 @@ export default {
     // Prepare payments array for invoice doc
     get_payments() {
       const payments = [];
-      
-      // Check if profile is ready
-      if (!this.isProfileReady()) {
-        console.warn('POS profile not ready for payments');
-        return payments;
-      }
-      
       // Use this.subtotal which is already in selected currency and includes all calculations
       const total_amount = this.subtotal;
       let remaining_amount = total_amount;
@@ -1451,13 +1442,17 @@ export default {
           -Math.abs(payment_amount) : payment_amount;
         
         // Handle currency conversion
+        // If selected_currency is USD and base is PKR:
+        // amount is in USD (e.g. 10 USD)
+        // base_amount should be in PKR (e.g. 3000 PKR)
+        // So multiply by exchange rate to get base_amount
         const base_amount = this.selected_currency !== this.pos_profile.currency ? 
           this.flt(adjusted_amount * (this.exchange_rate || 1), this.currency_precision) : 
           adjusted_amount;
         
         payments.push({
-          amount: adjusted_amount,
-          base_amount: base_amount,
+          amount: adjusted_amount,  // Keep in selected currency (e.g. USD)
+          base_amount: base_amount,  // Convert to base currency (e.g. PKR)
           mode_of_payment: payment.mode_of_payment,
           default: payment.default,
           account: payment.account || "",
@@ -1529,58 +1524,38 @@ export default {
     // Process and save invoice (handles update or create)
     process_invoice() {
       const doc = this.get_invoice_doc();
-      // Check if device is offline
-      if (!navigator.onLine) {
-        // Store invoice data in localStorage for later sync
+      if (doc.name) {
         try {
-          const offlineInvoices = JSON.parse(localStorage.getItem('posa_offline_invoices')) || [];
-          doc.offlineTimestamp = new Date().toISOString();
-          doc.syncStatus = 'pending';
-          offlineInvoices.push(doc);
-          localStorage.setItem('posa_offline_invoices', JSON.stringify(offlineInvoices));
-          this.eventBus.emit("show_message", {
-            title: __("Invoice saved offline. Will sync when connection is restored."),
-            color: "warning"
-          });
-          return doc;
-        } catch (error) {
-          console.error('Error saving invoice offline:', error);
-          this.eventBus.emit('show_message', {
-            title: __(error.message || 'Error saving invoice offline'),
-            color: 'error'
-          });
-          return false;
-        }
-      }
-      
-      // Online mode - use existing flow
-      try {
-        let updated_doc;
-        if (doc.name) {
-          // Update existing invoice
-          updated_doc = this.update_invoice(doc);
+          const updated_doc = this.update_invoice(doc);
           // Update posting date after invoice update
           if (updated_doc && updated_doc.posting_date) {
             this.posting_date = updated_doc.posting_date;
           }
-        } else {
-          // Create new invoice
-          updated_doc = this.update_invoice(doc);
+          return updated_doc;
+        } catch (error) {
+          console.error('Error in process_invoice:', error);
+          this.eventBus.emit('show_message', {
+            title: __(error.message || 'Error processing invoice'),
+            color: 'error'
+          });
+          return false;
+        }
+      } else {
+        try {
+          const updated_doc = this.update_invoice(doc);
           // Update posting date after invoice creation
           if (updated_doc && updated_doc.posting_date) {
             this.posting_date = updated_doc.posting_date;
           }
+          return updated_doc;
+        } catch (error) {
+          console.error('Error in process_invoice:', error);
+          this.eventBus.emit('show_message', {
+            title: __(error.message || 'Error processing invoice'),
+            color: 'error'
+          });
+          return false;
         }
-        
-        console.log('Invoice processed successfully:', updated_doc ? updated_doc.name : 'Unknown');
-        return updated_doc;
-      } catch (error) {
-        console.error('Error in process_invoice:', error);
-        this.eventBus.emit('show_message', {
-          title: __(error.message || 'Error processing invoice'),
-          color: 'error'
-        });
-        return false;
       }
     },
 
@@ -1600,47 +1575,101 @@ export default {
     async show_payment() {
       try {
         console.log('Starting show_payment process');
-        
-        // Validate invoice before showing payment
-        if (!this.validate_invoice()) {
+        console.log('Invoice state before payment:', {
+          invoiceType: this.invoiceType,
+          is_return: this.invoice_doc ? this.invoice_doc.is_return : false,
+          items_count: this.items.length,
+          customer: this.customer
+        });
+
+        if (!this.customer) {
+          console.log('Customer validation failed');
+          this.eventBus.emit("show_message", {
+            title: __(`Select a customer`),
+            color: "error",
+          });
           return;
         }
-        
-        // Get the current invoice document
-        const invoice_doc = this.get_invoice_doc();
-        
-        // Add offline indicators to the invoice for payment processing
-        if (!navigator.onLine) {
-          invoice_doc.is_offline = true;
-          invoice_doc.offline_timestamp = new Date().toISOString();
+
+        if (!this.items.length) {
+          console.log('Items validation failed - no items');
+          this.eventBus.emit("show_message", {
+            title: __(`Select items to sell`),
+            color: "error",
+          });
+          return;
         }
-        
-        // Handle sales order payment
-        if (this.invoiceType === 'Sales Order') {
+
+        console.log('Basic validations passed, proceeding to main validation');
+        const isValid = this.validate();
+        console.log('Main validation result:', isValid);
+
+        if (!isValid) {
+          console.log('Main validation failed');
+          return;
+        }
+
+        let invoice_doc;
+        if (this.invoice_doc.doctype == "Sales Order") {
           console.log('Processing Sales Order payment');
-          invoice_doc.is_sales_order = true;
-          invoice_doc.sales_order = this.sales_order;
+          invoice_doc = await this.process_invoice_from_order();
+        } else {
+          console.log('Processing regular invoice');
+          invoice_doc = this.process_invoice();
         }
+
+        if (!invoice_doc) {
+          console.log('Failed to process invoice');
+          return;
+        }
+
+        // Update invoice_doc with current currency info
+        invoice_doc.currency = this.selected_currency || this.pos_profile.currency;
+        invoice_doc.conversion_rate = this.exchange_rate || 1;
         
-        // Handle return invoice
+        // Update totals in invoice_doc to match current calculations
+        invoice_doc.total = this.Total;
+        invoice_doc.grand_total = this.subtotal;
+        
+        // Apply rounding to get rounded total
+        invoice_doc.rounded_total = this.roundAmount(this.subtotal);
+        invoice_doc.base_total = this.Total * (1 / this.exchange_rate || 1);
+        invoice_doc.base_grand_total = this.subtotal * (1 / this.exchange_rate || 1);
+        invoice_doc.base_rounded_total = this.roundAmount(invoice_doc.base_grand_total);
+        
+        // Check if this is a return invoice
         if (this.invoiceType === 'Return' || invoice_doc.is_return) {
           console.log('Preparing RETURN invoice for payment with:', {
             is_return: invoice_doc.is_return,
+            invoiceType: this.invoiceType,
             return_against: invoice_doc.return_against,
-            items: invoice_doc.items
+            items: invoice_doc.items.length,
+            grand_total: invoice_doc.grand_total
           });
           
-          // Ensure return invoice has correct flags
+          // For return invoices, explicitly ensure all amounts are negative
           invoice_doc.is_return = 1;
-          if (!invoice_doc.return_against) {
-            invoice_doc.return_against = this.return_against;
+          if (invoice_doc.grand_total > 0) invoice_doc.grand_total = -Math.abs(invoice_doc.grand_total);
+          if (invoice_doc.rounded_total > 0) invoice_doc.rounded_total = -Math.abs(invoice_doc.rounded_total);
+          if (invoice_doc.total > 0) invoice_doc.total = -Math.abs(invoice_doc.total);
+          if (invoice_doc.base_grand_total > 0) invoice_doc.base_grand_total = -Math.abs(invoice_doc.base_grand_total);
+          if (invoice_doc.base_rounded_total > 0) invoice_doc.base_rounded_total = -Math.abs(invoice_doc.base_rounded_total);
+          if (invoice_doc.base_total > 0) invoice_doc.base_total = -Math.abs(invoice_doc.base_total);
+          
+          // Ensure all items have negative quantity and amount
+          if (invoice_doc.items && invoice_doc.items.length) {
+            invoice_doc.items.forEach(item => {
+              if (item.qty > 0) item.qty = -Math.abs(item.qty);
+              if (item.stock_qty > 0) item.stock_qty = -Math.abs(item.stock_qty);
+              if (item.amount > 0) item.amount = -Math.abs(item.amount);
+            });
           }
         }
         
         // Get payments with correct sign (positive/negative)
         invoice_doc.payments = this.get_payments();
         console.log('Final payment data:', invoice_doc.payments);
-        
+
         // Double-check return invoice payments are negative
         if ((this.invoiceType === 'Return' || invoice_doc.is_return) && invoice_doc.payments.length) {
           invoice_doc.payments.forEach(payment => {
@@ -1649,189 +1678,161 @@ export default {
           });
           console.log('Ensured negative payment amounts for return:', invoice_doc.payments);
         }
-        
-        // Show payment dialog
+
         console.log('Showing payment dialog with currency:', invoice_doc.currency);
-        
-        // Emit events to show payment component and send invoice doc
         this.eventBus.emit("show_payment", "true");
         this.eventBus.emit("send_invoice_doc_payment", invoice_doc);
-        
+
       } catch (error) {
         console.error('Error in show_payment:', error);
-        frappe.show_alert({
-          message: __("Error processing payment: ") + (error.message || "Unknown error"),
-          indicator: 'red'
+        this.eventBus.emit("show_message", {
+          title: __("Error processing payment"),
+          color: "error",
+          message: error.message
         });
       }
     },
 
     // Validate invoice before payment/submit (return logic, quantity, rates, etc)
     async validate() {
-      console.log('Starting invoice validation');
+      console.log('Starting return validation');
       
-      try {
-        // Check if there are items in the invoice
-        if (!this.items.length) {
+      // For all returns, check if amounts are negative
+      if (this.invoiceType === 'Return' || this.invoice_doc.is_return) {
+        console.log('Validating return invoice values');
+        
+        // Check if quantities are negative
+        const positiveItems = this.items.filter(item => item.qty >= 0 || item.stock_qty >= 0);
+        if (positiveItems.length > 0) {
+          console.log('Found positive quantities in return items:', positiveItems.map(i => i.item_code));
           this.eventBus.emit('show_message', {
-            title: __(`No items in invoice`),
+            title: __(`Return items must have negative quantities`),
             color: 'error'
           });
-          return false;
-        }
-        
-        // For all returns, check if amounts are negative
-        if (this.invoiceType === 'Return' || this.invoice_doc.is_return) {
-          console.log('Validating return invoice values');
           
-          // Check if quantities are negative
-          const positiveItems = this.items.filter(item => item.qty >= 0 || item.stock_qty >= 0);
-          if (positiveItems.length > 0) {
-            console.log('Found positive quantities in return items:', positiveItems.map(i => i.item_code));
-            this.eventBus.emit('show_message', {
-              title: __(`Return items must have negative quantities`),
-              color: 'error'
-            });
-            
-            // Fix the quantities to be negative
-            positiveItems.forEach(item => {
-              item.qty = -Math.abs(item.qty);
-              item.stock_qty = -Math.abs(item.stock_qty);
-            });
-            
-            // Force update to reflect changes
-            this.$forceUpdate();
-          }
-          
-          // Ensure total amount is negative
-          if (this.subtotal > 0) {
-            console.log('Return has positive subtotal:', this.subtotal);
-            this.eventBus.emit('show_message', {
-              title: __(`Return total must be negative`),
-              color: 'warning'
-            });
-          }
-        }
-        
-        // For return with reference to existing invoice
-        if (this.invoice_doc.is_return && this.invoice_doc.return_against) {
-          console.log('Return doc:', this.invoice_doc);
-          console.log('Current items:', this.items);
-
-          try {
-            // Get original invoice items for comparison
-            const original_items = await new Promise((resolve, reject) => {
-              frappe.call({
-                method: 'frappe.client.get',
-                args: {
-                  doctype: 'Sales Invoice',
-                  name: this.invoice_doc.return_against
-                },
-                callback: (r) => {
-                  if (r.message) {
-                    console.log('Original invoice data:', r.message);
-                    resolve(r.message.items || []);
-                  } else {
-                    reject(new Error('Original invoice not found'));
-                  }
-                }
-              });
-            });
-
-            console.log('Original invoice items:', original_items);
-            
-            // Validate each return item
-            for (const item of this.items) {
-              console.log('Validating return item:', {
-                item_code: item.item_code,
-                rate: item.rate,
-                qty: item.qty
-              });
-
-              // Normalize item codes by trimming and converting to uppercase
-              const normalized_return_item_code = item.item_code.trim().toUpperCase();
-
-              // Find matching item in original invoice
-              const original_item = original_items.find(orig =>
-                orig.item_code.trim().toUpperCase() === normalized_return_item_code
-              );
-
-              if (!original_item) {
-                console.log('Item not found in original invoice:', {
-                  return_item_code: normalized_return_item_code,
-                  original_items: original_items.map(i => i.item_code.trim().toUpperCase())
-                });
-
-                this.eventBus.emit('show_message', {
-                  title: __(`Item ${item.item_code} not found in original invoice`),
-                  color: 'error'
-                });
-                return false;
-              }
-
-              // Compare rates with precision
-              const rate_diff = Math.abs(original_item.rate - item.rate);
-              console.log('Rate comparison:', {
-                return_rate: item.rate,
-                orig_rate: original_item.rate,
-                difference: rate_diff
-              });
-
-              if (rate_diff > 0.01) {
-                this.eventBus.emit('show_message', {
-                  title: __(`Rate mismatch for item ${item.item_code}`),
-                  color: 'error'
-                });
-                return false;
-              }
-
-              // Compare quantities
-              const return_qty = Math.abs(item.qty);
-              const orig_qty = original_item.qty;
-              console.log('Quantity comparison:', {
-                return_qty: return_qty,
-                orig_qty: orig_qty
-              });
-
-              if (return_qty > orig_qty) {
-                this.eventBus.emit('show_message', {
-                  title: __(`Return quantity cannot be greater than original quantity for item ${item.item_code}`),
-                  color: 'error'
-                });
-                return false;
-              }
-            }
-          } catch (error) {
-            console.error('Error in validation:', error);
-            this.eventBus.emit('show_message', {
-              title: __(`Error validating return: ${error.message}`),
-              color: 'error'
-            });
-            return false;
-          }
-        }
-        
-        // Validate customer is selected
-        if (!this.customer) {
-          this.eventBus.emit('show_message', {
-            title: __(`Please select a customer`),
-            color: 'error'
+          // Fix the quantities to be negative
+          positiveItems.forEach(item => {
+            item.qty = -Math.abs(item.qty);
+            item.stock_qty = -Math.abs(item.stock_qty);
           });
-          return false;
+          
+          // Force update to reflect changes
+          this.$forceUpdate();
         }
         
-        // Additional validations can be added here
-        
-        // All validations passed
-        return true;
-      } catch (error) {
-        console.error('Error in general validation:', error);
-        this.eventBus.emit('show_message', {
-          title: __(`Error during validation: ${error.message}`),
-          color: 'error'
-        });
-        return false;
+        // Ensure total amount is negative
+        if (this.subtotal > 0) {
+          console.log('Return has positive subtotal:', this.subtotal);
+          this.eventBus.emit('show_message', {
+            title: __(`Return total must be negative`),
+            color: 'warning'
+          });
+        }
       }
+      
+      // For return with reference to existing invoice
+      if (this.invoice_doc.is_return && this.invoice_doc.return_against) {
+        console.log('Return doc:', this.invoice_doc);
+        console.log('Current items:', this.items);
+
+        try {
+          // Get original invoice items for comparison
+          const original_items = await new Promise((resolve, reject) => {
+            frappe.call({
+              method: 'frappe.client.get',
+              args: {
+                doctype: 'Sales Invoice',
+                name: this.invoice_doc.return_against
+              },
+              callback: (r) => {
+                if (r.message) {
+                  console.log('Original invoice data:', r.message);
+                  resolve(r.message.items || []);
+                } else {
+                  reject(new Error('Original invoice not found'));
+                }
+              }
+            });
+          });
+
+          console.log('Original invoice items:', original_items);
+          console.log('Original item codes:', original_items.map(item => ({
+            item_code: item.item_code,
+            qty: item.qty,
+            rate: item.rate
+          })));
+
+          // Validate each return item
+          for (const item of this.items) {
+            console.log('Validating return item:', {
+              item_code: item.item_code,
+              rate: item.rate,
+              qty: item.qty
+            });
+
+            // Normalize item codes by trimming and converting to uppercase
+            const normalized_return_item_code = item.item_code.trim().toUpperCase();
+
+            // Find matching item in original invoice
+            const original_item = original_items.find(orig =>
+              orig.item_code.trim().toUpperCase() === normalized_return_item_code
+            );
+
+            if (!original_item) {
+              console.log('Item not found in original invoice:', {
+                return_item_code: normalized_return_item_code,
+                original_items: original_items.map(i => i.item_code.trim().toUpperCase())
+              });
+
+              this.eventBus.emit('show_message', {
+                title: __(`Item ${item.item_code} not found in original invoice`),
+                color: 'error'
+              });
+              return false;
+            }
+
+            // Compare rates with precision
+            const rate_diff = Math.abs(original_item.rate - item.rate);
+            console.log('Rate comparison:', {
+              return_rate: item.rate,
+              orig_rate: original_item.rate,
+              difference: rate_diff
+            });
+
+            if (rate_diff > 0.01) {
+              this.eventBus.emit('show_message', {
+                title: __(`Rate mismatch for item ${item.item_code}`),
+                color: 'error'
+              });
+              return false;
+            }
+
+            // Compare quantities
+            const return_qty = Math.abs(item.qty);
+            const orig_qty = original_item.qty;
+            console.log('Quantity comparison:', {
+              return_qty: return_qty,
+              orig_qty: orig_qty
+            });
+
+            if (return_qty > orig_qty) {
+              this.eventBus.emit('show_message', {
+                title: __(`Return quantity cannot be greater than original quantity for item ${item.item_code}`),
+                color: 'error'
+              });
+              return false;
+            }
+          }
+        } catch (error) {
+          console.error('Error in validation:', error);
+          this.eventBus.emit('show_message', {
+            title: __(`Error validating return: ${error.message}`),
+            color: 'error'
+          });
+          return false;
+        }
+      }
+      return true;
     },
 
     // Get draft invoices from backend
@@ -4071,93 +4072,35 @@ export default {
       this.calc_stock_qty(item, item.qty);
       this.$forceUpdate();
     },
-
-    // Add offline sync function for invoices
-    syncOfflineInvoices() {
-      // Check if online and if there are invoices to sync
-      if (!navigator.onLine) {
-        this.eventBus.emit("show_message", {
-          title: __("Cannot sync invoices while offline"),
-          color: "warning",
-        });
-        return;
-      }
-      
-      const offlineInvoices = JSON.parse(localStorage.getItem('posa_offline_invoices') || '[]');
-      if (!offlineInvoices.length) {
-        this.eventBus.emit("show_message", {
-          title: __("No offline invoices to sync"),
-          color: "info",
-        });
-        return;
-      }
-      
-      this.eventBus.emit("show_message", {
-        title: __(`Syncing ${offlineInvoices.length} offline invoices...`),
-        color: "info",
-      });
-      
-      // Process each invoice one by one
-      let syncedCount = 0;
-      let failedCount = 0;
-      const syncing = async () => {
-        for (const invoice of offlineInvoices) {
-          try {
-            await frappe.call({
-              method: "posawesome.posawesome.api.posapp.update_invoice",
-              args: {
-                data: invoice,
-              },
-              async: true,
-              callback: function (r) {
-                if (r.message) {
-                  syncedCount++;
-                } else {
-                  failedCount++;
-                }
-              },
-            });
-          } catch (error) {
-            console.error('Error syncing offline invoice:', error);
-            failedCount++;
-          }
-        }
-        
-        // Clear successfully synced invoices
-        localStorage.removeItem('posa_offline_invoices');
-        
-        // Show final result
-        this.eventBus.emit("show_message", {
-          title: __(`Sync completed: ${syncedCount} succeeded, ${failedCount} failed`),
-          color: failedCount ? "warning" : "success",
-        });
-      };
-      
-      syncing();
-    },
-
-    // Keyboard shortcut: submit invoice
-    shortSubmitInvoice(e) {
-      if ((e.key === "Enter" || e.keyCode === 13) && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        console.log('Keyboard shortcut triggered: Ctrl+Enter or Cmd+Enter for invoice submission');
-        this.show_payment();
-      }
-    },
-
-    // Add a method to check if profile is ready
-    isProfileReady() {
-      return this.is_profile_initialized && this.pos_profile && this.pos_profile.payments;
-    },
   },
 
   mounted() {
     // Register event listeners for POS profile, items, customer, offers, etc.
     this.eventBus.on("register_pos_profile", (data) => {
-      if (data && data.pos_profile) {
-        this.pos_profile = data.pos_profile;
-        this.is_profile_initialized = true;
-        console.log('POS profile initialized:', this.pos_profile.name);
+      this.pos_profile = data.pos_profile;
+      this.customer = data.pos_profile.customer;
+      this.pos_opening_shift = data.pos_opening_shift;
+      this.stock_settings = data.stock_settings;
+      // Increase precision for better handling of small amounts
+      this.float_precision = 6;  // Changed from 2 to 6
+      this.currency_precision = 6;  // Changed from 2 to 6
+      this.invoiceType = this.pos_profile.posa_default_sales_order
+        ? "Order"
+        : "Invoice";
+
+      // Add this block to handle currency initialization
+      if (this.pos_profile.posa_allow_multi_currency) {
+        this.fetch_available_currencies().then(() => {
+          // Set default currency after currencies are loaded
+          this.selected_currency = this.pos_profile.currency;
+          this.exchange_rate = 1;
+        }).catch(error => {
+          console.error("Error initializing currencies:", error);
+          this.eventBus.emit("show_message", {
+            title: __("Error loading currencies"),
+            color: "error"
+          });
+        });
       }
     });
     this.eventBus.on("add_item", (item) => {
@@ -4246,19 +4189,6 @@ export default {
     this.eventBus.on("reset_posting_date", () => {
       this.posting_date = frappe.datetime.nowdate();
     });
-    
-    // Add online/offline event listeners
-    window.addEventListener('online', this.handleConnectionChange);
-    window.addEventListener('offline', this.handleConnectionChange);
-    
-    // Check for offline invoices on mount
-    const offlineInvoices = JSON.parse(localStorage.getItem('posa_offline_invoices') || '[]');
-    if (offlineInvoices.length && navigator.onLine) {
-      this.eventBus.emit("show_message", {
-        title: __(`You have ${offlineInvoices.length} offline invoices to sync`),
-        color: "warning",
-      });
-    }
   },
   // Cleanup event listeners before component is destroyed
   beforeUnmount() {
@@ -4270,10 +4200,6 @@ export default {
     this.eventBus.off("clear_invoice");
     // Cleanup reset_posting_date listener
     this.eventBus.off("reset_posting_date");
-    
-    // Remove online/offline event listeners
-    window.removeEventListener('online', this.handleConnectionChange);
-    window.removeEventListener('offline', this.handleConnectionChange);
   },
   // Register global keyboard shortcuts when component is created
   created() {
@@ -4281,7 +4207,6 @@ export default {
     document.addEventListener("keydown", this.shortDeleteFirstItem.bind(this));
     document.addEventListener("keydown", this.shortOpenFirstItem.bind(this));
     document.addEventListener("keydown", this.shortSelectDiscount.bind(this));
-    document.addEventListener("keydown", this.shortSubmitInvoice.bind(this));
   },
   // Remove global keyboard shortcuts when component is unmounted
   unmounted() {
@@ -4289,7 +4214,6 @@ export default {
     document.removeEventListener("keydown", this.shortDeleteFirstItem);
     document.removeEventListener("keydown", this.shortOpenFirstItem);
     document.removeEventListener("keydown", this.shortSelectDiscount);
-    document.removeEventListener("keydown", this.shortSubmitInvoice);
   },
   // Vue watchers for reactive data changes
   watch: {
@@ -4368,29 +4292,6 @@ export default {
       },
       immediate: true
     },
-  },
-
-  handleConnectionChange(event) {
-    if (event.type === 'online') {
-      this.eventBus.emit("show_message", {
-        title: __("You are back online. Sync your offline invoices."),
-        color: "success",
-      });
-      
-      // Check for offline invoices
-      const offlineInvoices = JSON.parse(localStorage.getItem('posa_offline_invoices') || '[]');
-      if (offlineInvoices.length) {
-        this.eventBus.emit("show_message", {
-          title: __(`You have ${offlineInvoices.length} offline invoices to sync`),
-          color: "warning",
-        });
-      }
-    } else if (event.type === 'offline') {
-      this.eventBus.emit("show_message", {
-        title: __("You are now offline. Invoices will be saved locally."),
-        color: "warning",
-      });
-    }
   },
 };
 </script>
@@ -4488,24 +4389,5 @@ export default {
   font-weight: bold;
   border-bottom-left-radius: 8px;
   z-index: 1;
-}
-
-/* Pay button styling */
-.pay-button {
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2) !important;
-  transition: all 0.3s ease !important;
-  letter-spacing: 1px !important;
-  border-radius: 8px !important;
-  position: relative;
-  overflow: hidden;
-}
-
-.pay-button:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3) !important;
-}
-
-.pay-button:active {
-  transform: translateY(1px);
 }
 </style>
