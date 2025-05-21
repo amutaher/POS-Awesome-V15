@@ -10,10 +10,43 @@ frappe.pages['posapp'].on_page_load = function (wrapper) {
 
 	$('div.navbar-fixed-top').find('.container').css('padding', '0');
 
+	// Add PWA manifest link
+	$("head").append("<link rel='manifest' href='/assets/posawesome/manifest.json'>");
+	$("head").append("<meta name='theme-color' content='#0097A7'>");
+	$("head").append("<meta name='apple-mobile-web-app-capable' content='yes'>");
+	$("head").append("<meta name='apple-mobile-web-app-status-bar-style' content='black'>");
+	$("head").append("<meta name='apple-mobile-web-app-title' content='POS Awesome'>");
+	$("head").append("<link rel='apple-touch-icon' href='/assets/posawesome/icons/icon-192x192.png'>");
+
 	$("head").append("<link href='/assets/posawesome/node_modules/vuetify/dist/vuetify.min.css' rel='stylesheet'>");
 	$("head").append("<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/@mdi/font@6.x/css/materialdesignicons.min.css'>");
 	$("head").append("<link rel='stylesheet' href='https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900' />");
 	
+	// Register Service Worker
+	if ('serviceWorker' in navigator) {
+		window.addEventListener('load', () => {
+			navigator.serviceWorker.register('/assets/posawesome/service-worker.js')
+				.then((registration) => {
+					console.log('Service Worker registered with scope:', registration.scope);
+				})
+				.catch((error) => {
+					console.error('Service Worker registration failed:', error);
+				});
+		});
+	}
+
+	// Check if we're in development mode and load PWA verification tool
+	// To enable this, add "pwa_check=1" to the URL query parameters
+	if (window.location.search.includes('pwa_check=1')) {
+		$.getScript('/assets/posawesome/js/pwa-check.js')
+			.done(function() {
+				console.log('PWA verification tool loaded successfully');
+			})
+			.fail(function(jqxhr, settings, exception) {
+				console.error('Failed to load PWA verification tool:', exception);
+			});
+	}
+
 	// Listen for POS Profile registration
 	frappe.realtime.on('pos_profile_registered', () => {
 		const update_totals_based_on_tax_inclusive = () => {

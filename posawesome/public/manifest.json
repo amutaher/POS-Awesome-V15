@@ -1,0 +1,31 @@
+{
+  "name": "POS Awesome",
+  "short_name": "POS App",
+  "description": "A Point of Sale system for ERPNext",
+  "start_url": "/app/posapp",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#0097A7",
+  "icons": [
+    {
+      "src": "/assets/posawesome/js/posapp/components/pos/pos.png",
+      "sizes": "72x72",
+      "type": "image/png"
+    },
+    {
+      "src": "/assets/posawesome/icons/icon-144x144.png",
+      "sizes": "144x144",
+      "type": "image/png"
+    },
+    {
+      "src": "/assets/posawesome/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/assets/posawesome/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+} 
