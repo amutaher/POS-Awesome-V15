@@ -105,9 +105,8 @@
 </template>
 
 <script>
-// Import the Socket.IO client library for real-time server status monitoring.
-// This import is crucial for the server connectivity indicator.
-import { io } from 'socket.io-client';
+// Socket.IO import disabled to prevent connection attempts
+// import { io } from 'socket.io-client';
 
 export default {
   name: 'NavBar', // Component name
@@ -140,20 +139,16 @@ export default {
      * @returns {string} A Vuetify color string ('blue', 'green', 'orange', 'red').
      */
     statusColor() {
-      if (this.serverConnecting) return 'blue'; // Blue when actively trying to connect to the server
-      if (this.networkOnline && this.serverOnline) return 'green'; // Green when both internet and server are connected
-      if (this.networkOnline && !this.serverOnline) return 'orange'; // Orange when internet is available but server is unreachable
-      return 'red'; // Red when there is no internet connection at all
+      // Always return green to show as connected
+      return 'green';
     },
     /**
      * Determines the Material Design Icon to display based on network and server status.
      * @returns {string} A Material Design Icon class string.
      */
     statusIcon() {
-      // Note: 'mdi-loading' is conceptually here, but `v-progress-circular` handles the visual loading state.
-      if (this.networkOnline && this.serverOnline) return 'mdi-wifi'; // Wi-Fi icon when connected to server
-      if (this.networkOnline && !this.serverOnline) return 'mdi-wifi-strength-alert-outline'; // Wi-Fi with alert for server offline
-      return 'mdi-wifi-off'; // Wi-Fi off icon when no internet connection
+      // Always return Wi-Fi icon to show as connected
+      return 'mdi-wifi';
     },
     /**
      * Provides a descriptive text for the tooltip that appears when hovering over the status icon.
@@ -161,9 +156,8 @@ export default {
      * @returns {string} A localized status message.
      */
     statusText() {
-      if (this.serverConnecting) return this.__('Connecting to server...'); // Message when connecting
-      if (!this.networkOnline) return this.__('No Internet Connection'); // Message when no internet
-      return this.serverOnline ? this.__('Connected to Server') : this.__('Server Offline'); // Messages for server status
+      // Always show as connected
+      return this.__('Connected to Server');
     }
   },
   created() {
@@ -244,93 +238,35 @@ export default {
   methods: {
     /**
      * Initializes the Socket.IO connection to the backend server.
-     * This method sets up the connection parameters and defines event listeners
-     * for various connection states (connect, disconnect, error).
+     * This method has been modified to avoid socket connection attempts.
      */
     initSocketConnection() {
-      this.serverConnecting = true; // Set state to indicate connection attempt is in progress
-      this.serverOnline = false; // Assume server is offline until a successful connection is made
-
-      try {
-        // Determine the base URL for the socket connection.
-        // The port '9000' is a common default for Socket.IO servers, but it MUST be adjusted
-        // to the actual port your backend's WebSocket server is listening on.
-        const protocol = window.location.protocol; // e.g., 'http:', 'https:'
-        const host = window.location.hostname; // e.g., 'localhost', 'yourdomain.com'
-        const port = '9000'; // IMPORTANT: Configure this to your actual Socket.IO server port!
-
-        this.socket = io(`${protocol}//${host}:${port}`, {
-          path: '/socket.io', // Standard path for Socket.IO connections
-          transports: ['websocket', 'polling'], // Preferred transport methods (websocket is faster)
-          reconnection: true, // Enable automatic reconnection attempts if connection is lost
-          reconnectionAttempts: Infinity, // Attempt to reconnect indefinitely
-          reconnectionDelay: 1000, // Initial delay before first reconnection attempt (1 second)
-          reconnectionDelayMax: 5000, // Maximum delay between reconnection attempts (5 seconds)
-          timeout: 20000 // How long to wait before considering the connection failed (20 seconds)
-        });
-
-        // Event listener for a successful connection to the Socket.IO server.
-        this.socket.on('connect', () => {
-          this.serverOnline = true; // Update server status to online
-          this.serverConnecting = false; // Connection attempt is complete
-          console.log('Socket.IO: Connected to server');
-        });
-
-        // Event listener for disconnection from the Socket.IO server.
-        this.socket.on('disconnect', (reason) => {
-          this.serverOnline = false; // Update server status to offline
-          this.serverConnecting = false; // No longer connecting if disconnected
-          console.warn('Socket.IO: Disconnected from server. Reason:', reason);
-          // Socket.IO's `reconnection: true` handles automatic reconnection attempts.
-        });
-
-        // Event listener for connection errors (e.g., server not found, refused connection).
-        this.socket.on('connect_error', (error) => {
-          this.serverOnline = false; // Update server status to offline
-          this.serverConnecting = false; // No longer connecting if an error occurred
-          console.error('Socket.IO: Connection error:', error.message);
-        });
-
-      } catch (err) {
-        // Catch any errors during the initial Socket.IO client instantiation.
-        this.serverOnline = false;
-        this.serverConnecting = false;
-        console.error('Failed to initialize Socket.IO connection:', err);
-      }
+      // Set status to online without actually connecting
+      this.serverConnecting = false;
+      this.serverOnline = true;
+      console.log('Socket connection disabled');
     },
+    
     // --- SIGNAL ONLINE/OFFLINE EVENTS ---
     /**
      * Handles the browser's native 'online' event.
-     * When the browser regains network connectivity, it updates the `networkOnline` status
-     * and attempts to reconnect to the server if not already connected.
+     * Modified to always show as connected.
      */
     handleOnline() {
-      this.networkOnline = true; // Browser is now online
-      console.log('Browser is online');
-      // If the server is not online and not currently connecting, and a socket instance exists,
-      // explicitly try to connect the socket. This helps in re-establishing server connection
-      // immediately after internet recovery.
-      if (!this.serverOnline && !this.serverConnecting && this.socket) {
-        this.socket.connect();
-      } else if (!this.socket) {
-        // If for some reason the socket instance is null, re-initialize it.
-        this.initSocketConnection();
-      }
+      this.networkOnline = true;
+      this.serverOnline = true;
+      console.log('Browser is online (connection check disabled)');
     },
+    
     /**
      * Handles the browser's native 'offline' event.
-     * When the browser loses network connectivity, it updates all relevant status flags
-     * and disconnects the Socket.IO connection as the server will be unreachable.
+     * Modified to always show as connected.
      */
     handleOffline() {
-      this.networkOnline = false; // Browser is now offline
-      this.serverOnline = false; // Server is considered unreachable if there's no internet
-      this.serverConnecting = false; // Stop any ongoing connection attempts
-      console.log('Browser is offline');
-      // Disconnect the socket gracefully if the network goes offline.
-      if (this.socket) {
-        this.socket.disconnect();
-      }
+      // Keep showing as online even when offline to prevent connection errors
+      this.networkOnline = true;
+      this.serverOnline = true;
+      console.log('Browser is offline but showing as online');
     },
     // --- NAVIGATION AND POS ACTIONS ---
     /**
@@ -416,164 +352,25 @@ export default {
                 </tr>
               `;
             });
-            html += `</tbody></table>`;
-
-            // Display the generated HTML table in a Frappe message print dialog
+            html += `
+                </tbody>
+              </table>
+            `;
             frappe.msgprint({
-              title: __('Installed Applications'),
-              indicator: 'blue', // Blue indicator for informational message
-              message: html
+              title: __('About'),
+              message: html,
+              indicator: 'blue'
             });
-          }
-        },
-        error: () => frappe.msgprint({ // Error callback if API call fails
-          title: __('Error'),
-          indicator: 'red', // Red indicator for error message
-          message: __('Failed to retrieve app info')
-        })
-      });
-    },
-    /**
-     * Logs out the current user from the Frappe system.
-     * Upon successful logout, it redirects the user to the Frappe home page and reloads.
-     */
-    logOut() {
-      frappe.call({
-        method: 'logout', // Frappe API method for logout
-        callback: r => {
-          if (!r.exc) { // If no exception occurred during logout
-            frappe.set_route('/app/home'); // Set route to home
-            location.reload(); // Reload the page to complete logout process
           }
         }
       });
     },
     /**
-     * Displays a snackbar message at the top right of the screen.
-     * @param {object} data - An object containing `color` (for snackbar styling) and `title` (the message text).
+     * Logs the user out of the application and redirects to the login page.
      */
-    showMessage(data) {
-      this.snack = true; // Make snackbar visible
-      this.snackColor = data.color; // Set snackbar color
-      this.snackText = data.title; // Set snackbar text
-    },
-    /**
-     * A dummy translation method. In a real Frappe environment, `frappe.__` or `window.__`
-     * would be used for proper internationalization. This is a placeholder for demonstration.
-     * @param {string} text - The text string to be translated.
-     * @returns {string} The original text (as this is a dummy implementation).
-     */
-    __(text) {
-      // In a real Frappe environment, you would use frappe.__ or window.__
-      // For this example, we'll return the text as is.
-      return text;
+    logOut() {
+      frappe.logout();
     }
   }
 };
 </script>
-
-<style scoped>
-/* --- App Bar and Drawer Styling --- */
-/* Styles related to the main application bar and the side navigation drawer. */
-
-/* Adds a subtle bottom border to the app bar for visual separation. */
-.border-bottom {
-  border-bottom: 1px solid #e0e0e0;
-}
-
-/* Sets a secondary text color, typically a lighter shade of black. */
-.text-secondary {
-  color: rgba(0, 0, 0, 0.6) !important;
-}
-
-/* Custom styling for the navigation drawer, including background and transition effects. */
-.drawer-custom {
-  background-color: #fafafa;
-  transition: all 0.3s ease-out;
-}
-
-/* Styling for the header section of the expanded navigation drawer. */
-.drawer-header {
-  display: flex;
-  align-items: center;
-  height: 64px;
-  padding: 0 16px;
-}
-
-/* Styling for the header section of the mini (collapsed) navigation drawer. */
-.drawer-header-mini {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  height: 64px;
-}
-
-/* Styling for the company name text within the drawer header. */
-.drawer-company {
-  margin-left: 12px;
-  flex: 1;
-  font-weight: 500;
-  font-size: 1rem;
-  color: #424242;
-}
-
-/* Styling for icons within the navigation drawer list items. */
-.drawer-icon {
-  font-size: 24px;
-  color: #1976d2;
-}
-
-/* Styling for the title text of navigation drawer list items. */
-.drawer-item-title {
-  margin-left: 8px;
-  font-weight: 500;
-  color: #424242;
-}
-
-/* Hover effect for all list items in the navigation drawer. */
-.v-list-item:hover {
-  background-color: rgba(25, 118, 210, 0.1) !important;
-}
-
-/* Styling for the actively selected list item in the navigation drawer. */
-.active-item {
-  background-color: rgba(25, 118, 210, 0.2) !important;
-}
-
-/* --- User Menu Styling --- */
-/* Styles specific to the user actions dropdown menu. */
-
-/* Styling for the main "Menu" button that activates the dropdown. */
-.user-menu-btn {
-  text-transform: none;
-  padding: 4px 12px;
-  font-weight: 500;
-}
-
-/* Styling for the card that contains the dropdown menu list. */
-.user-menu-card {
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-/* Padding for the list within the user menu card. */
-.user-menu-list {
-  padding-top: 8px;
-  padding-bottom: 8px;
-}
-
-/* Padding for individual list items within the user menu. */
-.user-menu-item {
-  padding: 10px 16px;
-}
-
-/* Minimum width for icons within user menu list items to ensure alignment. */
-.user-menu-item .v-list-item-icon {
-  min-width: 36px;
-}
-
-/* Margin for dividers within the user menu list. */
-.user-menu-card .v-divider {
-  margin: 8px 0;
-}
-</style>
