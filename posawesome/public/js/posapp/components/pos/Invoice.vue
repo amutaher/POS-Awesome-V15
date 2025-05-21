@@ -436,7 +436,7 @@
             </v-col>
             <v-col cols="12">
               <v-btn block color="success" theme="dark" size="large" prepend-icon="mdi-credit-card"
-                @click="show_payment">
+                @click="submitInvoice">
                 {{ __("PAY") }}
               </v-btn>
             </v-col>
@@ -1709,6 +1709,14 @@ export default {
           return;
         }
 
+      if (!this.customer) {
+        this.eventBus.emit("show_message", {
+          title: __("Please select a customer"),
+          color: "error",
+        });
+        return;
+      }
+
       // If offline and using offline storage, handle appropriately
       if (!navigator.onLine && this.offlineStorage) {
         if (this.invoiceType === "Return") {
@@ -1734,15 +1742,42 @@ export default {
           return;
         }
 
-      // Original online functionality
-      this.eventBus.emit("show_payments", {
-        subtotal: this.subtotal,
-        customer: this.customer,
-        currency: this.selected_currency || this.pos_profile.currency,
-        exchange_rate: this.exchange_rate,
-        grand_total: this.subtotal,
-        invoice_doc: this.get_invoice_doc(),
-      });
+      try {
+        // For return invoices, use direct dialog method
+        if (this.invoiceType === 'Return') {
+          // For returns, use PaymentReturn dialog
+          this.eventBus.emit("show_dialog", {
+            dialog: "PaymentReturn",
+            props: {
+              invoice_doc: this.get_invoice_doc(),
+              pos_opening_shift: this.pos_opening_shift,
+              pos_profile: this.pos_profile,
+              customer_info: this.customer_info,
+              updating_existing: false,
+            },
+          });
+          return;
+        }
+        
+        // Original online functionality for regular invoices
+        this.eventBus.emit("show_payment", "true");
+        this.eventBus.emit("show_payments", {
+          subtotal: this.subtotal,
+          customer: this.customer,
+          currency: this.selected_currency || this.pos_profile.currency,
+          exchange_rate: this.exchange_rate,
+          grand_total: this.subtotal,
+          invoice_doc: this.get_invoice_doc(),
+          pos_opening_shift: this.pos_opening_shift,
+          pos_profile: this.pos_profile,
+          customer_info: this.customer_info,
+          updating_existing: false,
+        });
+      } catch (error) {
+        console.error("Error showing payment dialog:", error);
+        // Fallback method if the event emission fails
+        this.submitInvoice();
+      }
     },
 
     // Validate invoice before payment/submit (return logic, quantity, rates, etc)
@@ -4124,6 +4159,52 @@ export default {
       this.calc_stock_qty(item, item.qty);
       this.$forceUpdate();
     },
+
+    // Add a new method for payment button functionality
+    submitInvoice() {
+      if (!this.items.length) {
+        this.eventBus.emit("show_message", {
+          title: __("Please add items to the invoice"),
+          color: "error",
+        });
+        return;
+      }
+      
+      if (!this.customer) {
+        this.eventBus.emit("show_message", {
+          title: __("Please select a customer"),
+          color: "error",
+        });
+        return;
+      }
+      
+      // For return invoices
+      if (this.invoiceType === 'Return') {
+        this.eventBus.emit("show_dialog", {
+          dialog: "PaymentReturn",
+          props: {
+            invoice_doc: this.get_invoice_doc(),
+            pos_opening_shift: this.pos_opening_shift,
+            pos_profile: this.pos_profile,
+            customer_info: this.customer_info,
+            updating_existing: false,
+          },
+        });
+        return;
+      }
+      
+      // For regular invoices/orders
+      this.eventBus.emit("show_dialog", {
+        dialog: "Payment",
+        props: {
+          invoice_doc: this.get_invoice_doc(),
+          pos_opening_shift: this.pos_opening_shift,
+          pos_profile: this.pos_profile,
+          customer_info: this.customer_info,
+          updating_existing: false,
+        },
+      });
+    }
   },
 
   mounted() {

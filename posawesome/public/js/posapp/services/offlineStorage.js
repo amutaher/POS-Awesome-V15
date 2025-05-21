@@ -286,20 +286,75 @@ export default class OfflineStorage {
   }
 
   /**
-   * Queue a pending invoice for later submission
-   * @param {Object} invoice The invoice data to queue
-   * @returns {Promise} Promise that resolves with the ID of the queued invoice
+   * Queue an invoice for submission when back online
+   * @param {Object} invoice The invoice to queue
+   * @returns {Promise} Promise that resolves when invoice is queued
    */
   queuePendingInvoice(invoice) {
     const now = new Date();
-    const invoiceWithMeta = {
-      ...invoice,
-      timestamp: now.toISOString(),
-      status: 'pending',
-      sync_attempts: 0
-    };
     
-    return this.saveData('pendingInvoices', invoiceWithMeta);
+    // Make a safe copy of the invoice data by removing non-serializable objects
+    // and ensuring arrays are properly converted
+    const preprocessInvoice = (obj) => {
+      // If null or primitive type, return as is
+      if (obj === null || typeof obj !== 'object') {
+        return obj;
+      }
+      
+      // Handle arrays by making a serializable copy
+      if (Array.isArray(obj)) {
+        return obj.map(item => preprocessInvoice(item));
+      }
+      
+      // For objects, create a clean copy
+      const cleanObj = {};
+      for (const key in obj) {
+        if (obj.hasOwnProperty(key)) {
+          // Skip functions, DOM nodes and other non-serializable elements
+          if (typeof obj[key] === 'function' || 
+              obj[key] instanceof Node ||
+              key === '__ob__' ||  // Skip Vue observers
+              key === '_data') {   // Skip Vue internal data
+            continue;
+          }
+          
+          // Handle nested objects/arrays
+          cleanObj[key] = preprocessInvoice(obj[key]);
+        }
+      }
+      return cleanObj;
+    };
+
+    // Process the invoice to make it serializable
+    let safeInvoice;
+    try {
+      if (invoice.invoice_data) {
+        // If invoice_data already exists, we need to preprocess it
+        safeInvoice = {
+          ...invoice,
+          invoice_data: preprocessInvoice(invoice.invoice_data)
+        };
+      } else {
+        // If invoice is the direct data, preprocess it
+        safeInvoice = {
+          invoice_data: preprocessInvoice(invoice),
+          local_id: invoice.local_id || ('local_' + now.getTime())
+        };
+      }
+      
+      // Add metadata
+      const invoiceWithMeta = {
+        ...safeInvoice,
+        timestamp: now.toISOString(),
+        status: 'pending',
+        sync_attempts: 0
+      };
+      
+      return this.saveData('pendingInvoices', invoiceWithMeta);
+    } catch (error) {
+      console.error('Error preprocessing invoice for offline storage:', error);
+      throw new Error('Failed to prepare invoice for offline storage: ' + error.message);
+    }
   }
 
   /**
