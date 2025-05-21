@@ -377,9 +377,9 @@ export default {
       });
       
       this.eventBus.on('show_payment', (data) => {
-        this.payment = true ? data === 'true' : false;
-        this.offers = false ? data === 'true' : false;
-        this.coupons = false ? data === 'true' : false;
+        this.payment = data === 'true';
+        this.offers = false;
+        this.coupons = false;
       });
       
       this.eventBus.on('show_offers', (data) => {
