@@ -23,6 +23,18 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+    
+    <!-- Offline Alert Notification -->
+    <v-alert
+      v-if="!isOnline"
+      type="warning"
+      class="mb-2 mt-1"
+      variant="tonal"
+      icon="mdi-wifi-off"
+      density="compact"
+    >
+      {{ __("You are working offline. Invoices will be queued and synced when you're back online.") }}
+    </v-alert>
 
     <!-- Main Invoice Card (contains all invoice content) -->
     <v-card style="max-height: 70vh; height: 70vh"
@@ -439,6 +451,7 @@
 
 import format from "../../format";
 import Customer from "./Customer.vue";
+import OfflineStorage from "../../services/offlineStorage.js";
 
 export default {
   mixins: [format],
@@ -478,6 +491,9 @@ export default {
       invoice_posting_date: false, // Posting date dialog
       posting_date: frappe.datetime.nowdate(), // Invoice posting date
       posting_date_menu: false, // Posting date menu visibility
+      isOnline: navigator.onLine, // Track online/offline status
+      offlineStorage: null, // Reference to offline storage handler
+      pendingInvoicesCount: 0, // Track number of pending invoices
       items_headers: [
         // Table headers for items
         {
@@ -1010,33 +1026,145 @@ export default {
       });
     },
 
-    // Save and clear the current invoice (draft logic)
-    save_and_clear_invoice() {
+    // Save and clear the current invoice (draft logic) - Enhanced for offline support
+    async save_and_clear_invoice() {
       const doc = this.get_invoice_doc();
-      if (doc.name) {
-        old_invoice = this.update_invoice(doc);
-      } else {
-        if (doc.items.length) {
-          old_invoice = this.update_invoice(doc);
-        }
-        else {
-          this.eventBus.emit("show_message", {
-            title: `Nothing to save`,
-            color: "error",
-          });
-        }
-      }
-      if (!old_invoice) {
+      let success = false;
+      
+      // Check if there are items to save
+      if (!doc.items.length) {
         this.eventBus.emit("show_message", {
-          title: `Error saving the current invoice`,
+          title: "Nothing to save",
           color: "error",
         });
+        return null;
       }
-      else {
-        this.clear_invoice();
-        return old_invoice;
+      
+      // Handle offline case
+      if (!navigator.onLine && this.offlineStorage) {
+        const offlineSaved = await this.saveInvoiceOffline(doc);
+        if (offlineSaved) {
+          this.clear_invoice();
+          return doc;
+        }
+        return null;
       }
+      
+      // Handle online case (original logic)
+      if (doc.name) {
+        success = this.update_invoice(doc);
+      } else {
+        success = this.update_invoice(doc);
+      }
+      
+      if (!success) {
+        this.eventBus.emit("show_message", {
+          title: "Error saving the current invoice",
+          color: "error",
+        });
+        return null;
+      }
+      
+      this.clear_invoice();
+      return doc;
+    },
 
+    // Initialize the offline storage system
+    async initOfflineStorage() {
+      try {
+        this.offlineStorage = new OfflineStorage('posAwesomeDB', 1);
+        await this.offlineStorage.init();
+        
+        // Check for pending invoices
+        if (navigator.onLine) {
+          const pendingInvoices = await this.offlineStorage.getPendingInvoices();
+          this.pendingInvoicesCount = pendingInvoices ? pendingInvoices.length : 0;
+          
+          if (this.pendingInvoicesCount > 0) {
+            this.eventBus.emit("show_message", {
+              title: `You have ${this.pendingInvoicesCount} pending invoice(s) to sync`,
+              color: "info",
+              timeout: 5000
+            });
+          }
+        }
+      } catch (error) {
+        console.error("Error initializing offline storage:", error);
+      }
+    },
+    
+    // Handle online/offline status changes
+    handleOnlineStatusChange() {
+      this.isOnline = navigator.onLine;
+      
+      if (this.isOnline) {
+        this.eventBus.emit("show_message", {
+          title: "You're back online!",
+          color: "success",
+          timeout: 3000
+        });
+        
+        // Trigger sync if there's offline storage available
+        if (this.offlineStorage) {
+          this.offlineStorage.triggerSync();
+        }
+      } else {
+        this.eventBus.emit("show_message", {
+          title: "You're offline. Your work will be saved locally.",
+          color: "warning",
+          timeout: 3000
+        });
+      }
+    },
+    
+    // Handle sync completion event
+    handleSyncComplete() {
+      this.eventBus.emit("show_message", {
+        title: "Offline invoices have been synced successfully!",
+        color: "success",
+        timeout: 5000
+      });
+      
+      // Update pending invoices count
+      if (this.offlineStorage) {
+        this.offlineStorage.getPendingInvoices().then(invoices => {
+          this.pendingInvoicesCount = invoices ? invoices.length : 0;
+        });
+      }
+    },
+    
+    // Save invoice to offline storage for later syncing
+    async saveInvoiceOffline(invoice) {
+      try {
+        // Generate a local ID for the pending invoice
+        const localId = 'local_' + new Date().getTime();
+        invoice.offline_id = localId;
+        
+        // Queue invoice for later submission
+        await this.offlineStorage.queuePendingInvoice({
+          invoice_data: invoice,
+          local_id: localId
+        });
+        
+        // Update pending invoices count
+        this.pendingInvoicesCount++;
+        
+        this.eventBus.emit("show_message", {
+          title: "Invoice saved offline. Will sync when connection is restored.",
+          color: "success",
+          timeout: 5000
+        });
+        
+        return true;
+      } catch (error) {
+        console.error("Error saving invoice offline:", error);
+        this.eventBus.emit("show_message", {
+          title: "Error saving invoice offline: " + error.message,
+          color: "error",
+          timeout: 5000
+        });
+        return false;
+      }
     },
 
     // Start a new order (or return order) with provided data
@@ -1571,126 +1699,50 @@ export default {
       }
     },
 
-    // Show payment dialog after validation and processing
-    async show_payment() {
-      try {
-        console.log('Starting show_payment process');
-        console.log('Invoice state before payment:', {
-          invoiceType: this.invoiceType,
-          is_return: this.invoice_doc ? this.invoice_doc.is_return : false,
-          items_count: this.items.length,
-          customer: this.customer
-        });
-
-        if (!this.customer) {
-          console.log('Customer validation failed');
-          this.eventBus.emit("show_message", {
-            title: __(`Select a customer`),
-            color: "error",
-          });
-          return;
-        }
-
-        if (!this.items.length) {
-          console.log('Items validation failed - no items');
-          this.eventBus.emit("show_message", {
-            title: __(`Select items to sell`),
-            color: "error",
-          });
-          return;
-        }
-
-        console.log('Basic validations passed, proceeding to main validation');
-        const isValid = this.validate();
-        console.log('Main validation result:', isValid);
-
-        if (!isValid) {
-          console.log('Main validation failed');
-          return;
-        }
-
-        let invoice_doc;
-        if (this.invoice_doc.doctype == "Sales Order") {
-          console.log('Processing Sales Order payment');
-          invoice_doc = await this.process_invoice_from_order();
-        } else {
-          console.log('Processing regular invoice');
-          invoice_doc = this.process_invoice();
-        }
-
-        if (!invoice_doc) {
-          console.log('Failed to process invoice');
-          return;
-        }
-
-        // Update invoice_doc with current currency info
-        invoice_doc.currency = this.selected_currency || this.pos_profile.currency;
-        invoice_doc.conversion_rate = this.exchange_rate || 1;
-        
-        // Update totals in invoice_doc to match current calculations
-        invoice_doc.total = this.Total;
-        invoice_doc.grand_total = this.subtotal;
-        
-        // Apply rounding to get rounded total
-        invoice_doc.rounded_total = this.roundAmount(this.subtotal);
-        invoice_doc.base_total = this.Total * (1 / this.exchange_rate || 1);
-        invoice_doc.base_grand_total = this.subtotal * (1 / this.exchange_rate || 1);
-        invoice_doc.base_rounded_total = this.roundAmount(invoice_doc.base_grand_total);
-        
-        // Check if this is a return invoice
-        if (this.invoiceType === 'Return' || invoice_doc.is_return) {
-          console.log('Preparing RETURN invoice for payment with:', {
-            is_return: invoice_doc.is_return,
-            invoiceType: this.invoiceType,
-            return_against: invoice_doc.return_against,
-            items: invoice_doc.items.length,
-            grand_total: invoice_doc.grand_total
-          });
-          
-          // For return invoices, explicitly ensure all amounts are negative
-          invoice_doc.is_return = 1;
-          if (invoice_doc.grand_total > 0) invoice_doc.grand_total = -Math.abs(invoice_doc.grand_total);
-          if (invoice_doc.rounded_total > 0) invoice_doc.rounded_total = -Math.abs(invoice_doc.rounded_total);
-          if (invoice_doc.total > 0) invoice_doc.total = -Math.abs(invoice_doc.total);
-          if (invoice_doc.base_grand_total > 0) invoice_doc.base_grand_total = -Math.abs(invoice_doc.base_grand_total);
-          if (invoice_doc.base_rounded_total > 0) invoice_doc.base_rounded_total = -Math.abs(invoice_doc.base_rounded_total);
-          if (invoice_doc.base_total > 0) invoice_doc.base_total = -Math.abs(invoice_doc.base_total);
-          
-          // Ensure all items have negative quantity and amount
-          if (invoice_doc.items && invoice_doc.items.length) {
-            invoice_doc.items.forEach(item => {
-              if (item.qty > 0) item.qty = -Math.abs(item.qty);
-              if (item.stock_qty > 0) item.stock_qty = -Math.abs(item.stock_qty);
-              if (item.amount > 0) item.amount = -Math.abs(item.amount);
-            });
-          }
-        }
-        
-        // Get payments with correct sign (positive/negative)
-        invoice_doc.payments = this.get_payments();
-        console.log('Final payment data:', invoice_doc.payments);
-
-        // Double-check return invoice payments are negative
-        if ((this.invoiceType === 'Return' || invoice_doc.is_return) && invoice_doc.payments.length) {
-          invoice_doc.payments.forEach(payment => {
-            if (payment.amount > 0) payment.amount = -Math.abs(payment.amount);
-            if (payment.base_amount > 0) payment.base_amount = -Math.abs(payment.base_amount);
-          });
-          console.log('Ensured negative payment amounts for return:', invoice_doc.payments);
-        }
-
-        console.log('Showing payment dialog with currency:', invoice_doc.currency);
-        this.eventBus.emit("show_payment", "true");
-        this.eventBus.emit("send_invoice_doc_payment", invoice_doc);
-
-      } catch (error) {
-        console.error('Error in show_payment:', error);
+    // Show payment dialog - Enhanced for offline support
+    show_payment() {
+      if (!this.items.length) {
         this.eventBus.emit("show_message", {
-          title: __("Error processing payment"),
+          title: "Please add items to the invoice",
           color: "error",
-          message: error.message
         });
+        return;
       }
+      
+      // If offline and using offline storage, handle appropriately
+      if (!navigator.onLine && this.offlineStorage) {
+        if (this.invoiceType === "Return") {
+          this.eventBus.emit("show_message", {
+            title: "Returns cannot be processed offline",
+            color: "error",
+            timeout: 5000
+          });
+          return;
+        }
+        
+        // For regular invoices, save as draft and notify user
+        this.eventBus.emit("show_message", {
+          title: "You're offline. Invoice will be saved as draft.",
+          color: "warning",
+          timeout: 3000
+        });
+        
+        // After short delay, save as draft
+        setTimeout(() => {
+          this.save_and_clear_invoice();
+        }, 1500);
+        return;
+      }
+      
+      // Original online functionality
+      this.eventBus.emit("show_payments", {
+        subtotal: this.subtotal,
+        customer: this.customer,
+        currency: this.selected_currency || this.pos_profile.currency,
+        exchange_rate: this.exchange_rate,
+        grand_total: this.subtotal,
+        invoice_doc: this.get_invoice_doc(),
+      });
     },
 
     // Validate invoice before payment/submit (return logic, quantity, rates, etc)
@@ -4189,6 +4241,14 @@ export default {
     this.eventBus.on("reset_posting_date", () => {
       this.posting_date = frappe.datetime.nowdate();
     });
+    
+    // Listen for online/offline events
+    window.addEventListener('online', this.handleOnlineStatusChange);
+    window.addEventListener('offline', this.handleOnlineStatusChange);
+    window.addEventListener('pos-awesome-sync-complete', this.handleSyncComplete);
+    
+    // Initialize offline storage
+    this.initOfflineStorage();
   },
   // Cleanup event listeners before component is destroyed
   beforeUnmount() {
@@ -4200,6 +4260,11 @@ export default {
     this.eventBus.off("clear_invoice");
     // Cleanup reset_posting_date listener
     this.eventBus.off("reset_posting_date");
+    
+    // Clean up event listeners
+    window.removeEventListener('online', this.handleOnlineStatusChange);
+    window.removeEventListener('offline', this.handleOnlineStatusChange);
+    window.removeEventListener('pos-awesome-sync-complete', this.handleSyncComplete);
   },
   // Register global keyboard shortcuts when component is created
   created() {
@@ -4389,5 +4454,16 @@ export default {
   font-weight: bold;
   border-bottom-left-radius: 8px;
   z-index: 1;
+}
+
+/* Add offline-related styles */
+.offline-alert {
+  margin-bottom: 10px;
+  background-color: rgba(255, 152, 0, 0.1);
+  border-left: 4px solid #ff9800;
+}
+
+.return-mode {
+  border-left: 4px solid #f44336;
 }
 </style>

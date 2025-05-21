@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pos-awesome-cache-v1';
+const CACHE_NAME = 'pos-awesome-cache-v2';
 
 // List of assets to cache for offline functionality
 const ASSETS_TO_CACHE = [
@@ -7,13 +7,35 @@ const ASSETS_TO_CACHE = [
   '/assets/posawesome/js/posapp/Home.vue',
   '/assets/posawesome/js/posapp/components/Navbar.vue',
   '/assets/posawesome/js/posapp/components/pos/Pos.vue',
+  '/assets/posawesome/js/posapp/components/pos/Invoice.vue',
+  '/assets/posawesome/js/posapp/components/pos/ItemsSelector.vue',
+  '/assets/posawesome/js/posapp/components/pos/Payments.vue',
+  '/assets/posawesome/js/posapp/components/pos/Customer.vue',
+  '/assets/posawesome/js/posapp/components/pos/CustomerSelector.vue',
   '/assets/posawesome/js/posapp/components/pos/pos.png',
+  '/assets/posawesome/js/posapp/services/offlineStorage.js',
+  '/assets/posawesome/icons/icon-72x72.png',
   '/assets/posawesome/icons/icon-144x144.png',
   '/assets/posawesome/icons/icon-192x192.png',
   '/assets/posawesome/icons/icon-512x512.png',
   '/assets/posawesome/node_modules/vuetify/dist/vuetify.min.css',
   'https://cdn.jsdelivr.net/npm/@mdi/font@6.x/css/materialdesignicons.min.css',
   'https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900'
+];
+
+// API endpoints to cache for offline use
+const API_ROUTES_TO_CACHE = [
+  '/api/method/posawesome.posawesome.api.posapp.get_items',
+  '/api/method/posawesome.posawesome.api.posapp.get_customers',
+  '/api/method/posawesome.posawesome.api.posapp.get_pos_profile',
+  '/api/method/posawesome.posawesome.api.posapp.get_customer_details',
+  '/api/method/posawesome.posawesome.api.posapp.get_offers',
+  '/api/method/posawesome.posawesome.api.posapp.get_item_details',
+  '/api/method/posawesome.posawesome.api.posapp.get_item_group_suggestion',
+  '/api/method/posawesome.posawesome.api.posapp.get_items_details',
+  '/api/method/posawesome.posawesome.api.posapp.get_items_groups',
+  '/api/method/posawesome.posawesome.api.posapp.get_delivery_charges',
+  '/api/method/posawesome.posawesome.api.posapp.get_customer_addresses'
 ];
 
 // Install event - caches assets for offline use
@@ -23,7 +45,7 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
-        console.log('[Service Worker] Caching app shell');
+        console.log('[Service Worker] Caching app shell and assets');
         return cache.addAll(ASSETS_TO_CACHE);
       })
       .then(() => self.skipWaiting())
@@ -47,15 +69,66 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// Network-first strategy for API calls with fallback to cache
+async function networkFirstWithCacheFallback(request) {
+  try {
+    // Try network first
+    const networkResponse = await fetch(request);
+    
+    // If successful, clone and cache the response
+    if (networkResponse && networkResponse.status === 200) {
+      const responseToCache = networkResponse.clone();
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(request, responseToCache);
+    }
+    
+    return networkResponse;
+  } catch (error) {
+    // If network fails, try to get from cache
+    const cachedResponse = await caches.match(request);
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+    
+    // If nothing in cache for API requests, return a JSON error response
+    if (request.url.includes('/api/')) {
+      return new Response(JSON.stringify({ 
+        error: true, 
+        message: 'You are offline. This data is not available offline.',
+        offline: true
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // For other resources, return a generic error
+    return new Response('Network error happened', {
+      status: 408,
+      headers: { 'Content-Type': 'text/plain' }
+    });
+  }
+}
+
 // Fetch event - serves from cache if available, otherwise fetches from network
 self.addEventListener('fetch', (event) => {
-  // Skip cross-origin requests
+  // Skip cross-origin requests except for CDN resources
   if (!event.request.url.startsWith(self.location.origin) && 
       !event.request.url.startsWith('https://cdn.jsdelivr.net') && 
       !event.request.url.startsWith('https://fonts.googleapis.com')) {
     return;
   }
   
+  // Special handling for API routes we want to cache
+  const isApiRouteToCache = API_ROUTES_TO_CACHE.some(route => 
+    event.request.url.includes(route)
+  );
+  
+  if (isApiRouteToCache) {
+    event.respondWith(networkFirstWithCacheFallback(event.request));
+    return;
+  }
+  
+  // Cache-first strategy for static assets
   event.respondWith(
     caches.match(event.request)
       .then((response) => {
@@ -78,9 +151,8 @@ self.addEventListener('fetch', (event) => {
             
             caches.open(CACHE_NAME)
               .then((cache) => {
-                // Don't cache API calls or dynamic content
-                if (!event.request.url.includes('/api/') && 
-                    !event.request.url.includes('socket.io')) {
+                // Don't cache socket.io connections
+                if (!event.request.url.includes('socket.io')) {
                   cache.put(event.request, responseToCache);
                 }
               });
@@ -110,14 +182,34 @@ self.addEventListener('sync', (event) => {
 async function syncPendingInvoices() {
   console.log('[Service Worker] Syncing pending invoices');
   
-  // Implementation would depend on your app's offline storage mechanism
-  // This is just a placeholder
+  // Open the database and get pending invoices
   try {
-    // Get pending data from IndexedDB or localStorage
-    // Send it to the server
-    return true;
+    const clients = await self.clients.matchAll();
+    if (clients && clients.length) {
+      // Notify clients that sync is starting
+      clients.forEach(client => {
+        client.postMessage({
+          type: 'SYNC_STARTED'
+        });
+      });
+      
+      // Trigger the actual sync in the client
+      clients[0].postMessage({
+        type: 'SYNC_PENDING_INVOICES'
+      });
+      
+      return true;
+    }
+    return false;
   } catch (error) {
     console.error('[Service Worker] Sync failed:', error);
     return false;
   }
-} 
+}
+
+// Listen for messages from clients
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SYNC_COMPLETED') {
+    console.log('[Service Worker] Sync completed successfully');
+  }
+}); 
