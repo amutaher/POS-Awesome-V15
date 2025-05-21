@@ -1628,27 +1628,21 @@ export default {
           
           // Check if offline data is available
           if (!this.offlineDataStatus || !this.offlineDataStatus.isReady) {
-            this.eventBus.emit('show_message', {
-              title: __('Cannot create offline invoice: Required data not available offline'),
-              color: 'error'
-            });
+            // Use alert instead of eventBus
+            alert(__('Cannot create offline invoice: Required data not available offline'));
             return;
           }
           
           // Basic validations still apply in offline mode
           if (!this.customer) {
-            this.eventBus.emit("show_message", {
-              title: __(`Select a customer`),
-              color: "error",
-            });
+            // Use alert instead of eventBus
+            alert(__(`Select a customer`));
             return;
           }
 
           if (!this.items.length) {
-            this.eventBus.emit("show_message", {
-              title: __(`Select items to sell`),
-              color: "error",
-            });
+            // Use alert instead of eventBus
+            alert(__(`Select items to sell`));
             return;
           }
 
@@ -1660,16 +1654,25 @@ export default {
             }
           } catch (error) {
             console.error('Validation error:', error);
-            this.eventBus.emit("show_message", {
-              title: __("Validation error: ") + (error.message || "Unknown error"),
-              color: "error"
-            });
+            // Use alert instead of eventBus
+            alert(__("Validation error: ") + (error.message || "Unknown error"));
             return;
           }
           
           // Show confirmation dialog for offline saving
-          if (confirm(__('You are offline. Save this invoice for syncing later?'))) {
-            await this.saveInvoiceOffline();
+          try {
+            if (confirm(__('You are offline. Save this invoice for syncing later?'))) {
+              // Wrap everything in a try-catch to handle any errors in the event emission
+              try {
+                const result = await this.saveInvoiceOffline();
+                console.log('Invoice saved offline result:', result);
+              } catch (err) {
+                console.error('Error in offline save process:', err);
+                alert(__('Error saving invoice offline: ') + (err.message || 'Unknown error'));
+              }
+            }
+          } catch (confirmErr) {
+            console.error('Error in confirm dialog:', confirmErr);
           }
           
           return;
@@ -4229,11 +4232,9 @@ export default {
         
         // If invoice still exists and is pending, it hasn't synced yet
         if (invoice && invoice.status === 'pending') {
-          // Show message that sync is in progress
-          this.eventBus.emit('show_message', {
-            title: __('Your offline invoice is syncing...'),
-            color: 'info'
-          });
+          // Show message that sync is in progress - use console log instead
+          console.log('Your offline invoice is syncing...');
+          // In a real app we might show a notification or visual indicator here
         } else {
           // Invoice no longer exists or has been synced
           this.lastOfflineInvoiceId = null;
@@ -4246,10 +4247,8 @@ export default {
     // Save invoice to offline storage when network is unavailable
     async saveInvoiceOffline() {
       if (!this.offlineStorage) {
-        this.eventBus.emit('show_message', {
-          title: __('Cannot save offline: Offline storage not initialized'),
-          color: 'error'
-        });
+        // Use alert instead of eventBus
+        alert(__('Cannot save offline: Offline storage not initialized'));
         return false;
       }
       
@@ -4279,22 +4278,17 @@ export default {
         // Set last offline invoice ID for tracking
         this.lastOfflineInvoiceId = result;
         
-        // Show success message
-        this.eventBus.emit('show_message', {
-          title: __('Invoice saved offline. It will be submitted when you reconnect.'),
-          color: 'success'
-        });
+        // Show success message using alert instead of eventBus
+        alert(__('Invoice saved offline. It will be submitted when you reconnect.'));
         
-        // Clear the current invoice
-        this.eventBus.emit('clear_invoice');
+        // Clear the current invoice without using eventBus
+        this.clear_invoice();
         
         return true;
       } catch (error) {
         console.error('Error saving invoice offline:', error);
-        this.eventBus.emit('show_message', {
-          title: __('Failed to save invoice offline: ') + (error.message || 'Unknown error'),
-          color: 'error'
-        });
+        // Use alert instead of eventBus
+        alert(__('Failed to save invoice offline: ') + (error.message || 'Unknown error'));
         return false;
       }
     },
