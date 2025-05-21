@@ -423,9 +423,10 @@
               </v-btn>
             </v-col>
             <v-col cols="12">
-              <v-btn block color="success" theme="dark" size="large" prepend-icon="mdi-credit-card"
-                @click="show_payment">
+              <v-btn block color="success" theme="dark" size="x-large" height="60" prepend-icon="mdi-credit-card"
+                @click="show_payment" class="pay-button text-h5 font-weight-bold">
                 {{ __("PAY") }}
+                <span v-if="subtotal > 0" class="ml-2">({{ formatCurrency(subtotal) }} {{ currencySymbol(displayCurrency) }})</span>
               </v-btn>
             </v-col>
           </v-row>
@@ -1549,38 +1550,33 @@ export default {
       }
       
       // Online mode - use existing flow
-      if (doc.name) {
-        try {
-          const updated_doc = this.update_invoice(doc);
+      try {
+        let updated_doc;
+        if (doc.name) {
+          // Update existing invoice
+          updated_doc = this.update_invoice(doc);
           // Update posting date after invoice update
           if (updated_doc && updated_doc.posting_date) {
             this.posting_date = updated_doc.posting_date;
           }
-          return updated_doc;
-        } catch (error) {
-          console.error('Error in process_invoice:', error);
-          this.eventBus.emit('show_message', {
-            title: __(error.message || 'Error processing invoice'),
-            color: 'error'
-          });
-          return false;
-        }
-      } else {
-        try {
-          const updated_doc = this.update_invoice(doc);
+        } else {
+          // Create new invoice
+          updated_doc = this.update_invoice(doc);
           // Update posting date after invoice creation
           if (updated_doc && updated_doc.posting_date) {
             this.posting_date = updated_doc.posting_date;
           }
-          return updated_doc;
-        } catch (error) {
-          console.error('Error in process_invoice:', error);
-          this.eventBus.emit('show_message', {
-            title: __(error.message || 'Error processing invoice'),
-            color: 'error'
-          });
-          return false;
         }
+        
+        console.log('Invoice processed successfully:', updated_doc ? updated_doc.name : 'Unknown');
+        return updated_doc;
+      } catch (error) {
+        console.error('Error in process_invoice:', error);
+        this.eventBus.emit('show_message', {
+          title: __(error.message || 'Error processing invoice'),
+          color: 'error'
+        });
+        return false;
       }
     },
 
@@ -1600,12 +1596,6 @@ export default {
     async show_payment() {
       try {
         console.log('Starting show_payment process');
-        console.log('Invoice state before payment:', {
-          invoiceType: this.invoiceType,
-          is_return: this.invoice_doc ? this.invoice_doc.is_return : false,
-          items_count: this.items.length,
-          customer: this.customer
-        });
 
         if (!this.customer) {
           console.log('Customer validation failed');
@@ -1626,7 +1616,7 @@ export default {
         }
 
         console.log('Basic validations passed, proceeding to main validation');
-        const isValid = this.validate();
+        const isValid = await this.validate();
         console.log('Main validation result:', isValid);
 
         if (!isValid) {
@@ -1660,7 +1650,6 @@ export default {
           // Add offline indicators to the invoice for payment processing
           invoice_doc.isOffline = true;
           invoice_doc.offlineTimestamp = new Date().toISOString();
-          
         } else {
           // Online mode - use existing flow
           if (this.invoice_doc.doctype == "Sales Order") {
@@ -1673,6 +1662,10 @@ export default {
           
           if (!invoice_doc) {
             console.log('Failed to process invoice');
+            this.eventBus.emit("show_message", {
+              title: __("Failed to process invoice. Please try again."),
+              color: "error",
+            });
             return;
           }
         }
@@ -1740,153 +1733,178 @@ export default {
       } catch (error) {
         console.error('Error in show_payment:', error);
         this.eventBus.emit("show_message", {
-          title: __("Error processing payment"),
-          color: "error",
-          message: error.message
+          title: __("Error processing payment: ") + (error.message || "Unknown error"),
+          color: "error"
         });
       }
     },
 
     // Validate invoice before payment/submit (return logic, quantity, rates, etc)
     async validate() {
-      console.log('Starting return validation');
+      console.log('Starting invoice validation');
       
-      // For all returns, check if amounts are negative
-      if (this.invoiceType === 'Return' || this.invoice_doc.is_return) {
-        console.log('Validating return invoice values');
-        
-        // Check if quantities are negative
-        const positiveItems = this.items.filter(item => item.qty >= 0 || item.stock_qty >= 0);
-        if (positiveItems.length > 0) {
-          console.log('Found positive quantities in return items:', positiveItems.map(i => i.item_code));
+      try {
+        // Check if there are items in the invoice
+        if (!this.items.length) {
           this.eventBus.emit('show_message', {
-            title: __(`Return items must have negative quantities`),
-            color: 'error'
-          });
-          
-          // Fix the quantities to be negative
-          positiveItems.forEach(item => {
-            item.qty = -Math.abs(item.qty);
-            item.stock_qty = -Math.abs(item.stock_qty);
-          });
-          
-          // Force update to reflect changes
-          this.$forceUpdate();
-        }
-        
-        // Ensure total amount is negative
-        if (this.subtotal > 0) {
-          console.log('Return has positive subtotal:', this.subtotal);
-          this.eventBus.emit('show_message', {
-            title: __(`Return total must be negative`),
-            color: 'warning'
-          });
-        }
-      }
-      
-      // For return with reference to existing invoice
-      if (this.invoice_doc.is_return && this.invoice_doc.return_against) {
-        console.log('Return doc:', this.invoice_doc);
-        console.log('Current items:', this.items);
-
-        try {
-          // Get original invoice items for comparison
-          const original_items = await new Promise((resolve, reject) => {
-            frappe.call({
-              method: 'frappe.client.get',
-              args: {
-                doctype: 'Sales Invoice',
-                name: this.invoice_doc.return_against
-              },
-              callback: (r) => {
-                if (r.message) {
-                  console.log('Original invoice data:', r.message);
-                  resolve(r.message.items || []);
-                } else {
-                  reject(new Error('Original invoice not found'));
-                }
-              }
-            });
-          });
-
-          console.log('Original invoice items:', original_items);
-          console.log('Original item codes:', original_items.map(item => ({
-            item_code: item.item_code,
-            qty: item.qty,
-            rate: item.rate
-          })));
-
-          // Validate each return item
-          for (const item of this.items) {
-            console.log('Validating return item:', {
-              item_code: item.item_code,
-              rate: item.rate,
-              qty: item.qty
-            });
-
-            // Normalize item codes by trimming and converting to uppercase
-            const normalized_return_item_code = item.item_code.trim().toUpperCase();
-
-            // Find matching item in original invoice
-            const original_item = original_items.find(orig =>
-              orig.item_code.trim().toUpperCase() === normalized_return_item_code
-            );
-
-            if (!original_item) {
-              console.log('Item not found in original invoice:', {
-                return_item_code: normalized_return_item_code,
-                original_items: original_items.map(i => i.item_code.trim().toUpperCase())
-              });
-
-              this.eventBus.emit('show_message', {
-                title: __(`Item ${item.item_code} not found in original invoice`),
-                color: 'error'
-              });
-              return false;
-            }
-
-            // Compare rates with precision
-            const rate_diff = Math.abs(original_item.rate - item.rate);
-            console.log('Rate comparison:', {
-              return_rate: item.rate,
-              orig_rate: original_item.rate,
-              difference: rate_diff
-            });
-
-            if (rate_diff > 0.01) {
-              this.eventBus.emit('show_message', {
-                title: __(`Rate mismatch for item ${item.item_code}`),
-                color: 'error'
-              });
-              return false;
-            }
-
-            // Compare quantities
-            const return_qty = Math.abs(item.qty);
-            const orig_qty = original_item.qty;
-            console.log('Quantity comparison:', {
-              return_qty: return_qty,
-              orig_qty: orig_qty
-            });
-
-            if (return_qty > orig_qty) {
-              this.eventBus.emit('show_message', {
-                title: __(`Return quantity cannot be greater than original quantity for item ${item.item_code}`),
-                color: 'error'
-              });
-              return false;
-            }
-          }
-        } catch (error) {
-          console.error('Error in validation:', error);
-          this.eventBus.emit('show_message', {
-            title: __(`Error validating return: ${error.message}`),
+            title: __(`No items in invoice`),
             color: 'error'
           });
           return false;
         }
+        
+        // For all returns, check if amounts are negative
+        if (this.invoiceType === 'Return' || this.invoice_doc.is_return) {
+          console.log('Validating return invoice values');
+          
+          // Check if quantities are negative
+          const positiveItems = this.items.filter(item => item.qty >= 0 || item.stock_qty >= 0);
+          if (positiveItems.length > 0) {
+            console.log('Found positive quantities in return items:', positiveItems.map(i => i.item_code));
+            this.eventBus.emit('show_message', {
+              title: __(`Return items must have negative quantities`),
+              color: 'error'
+            });
+            
+            // Fix the quantities to be negative
+            positiveItems.forEach(item => {
+              item.qty = -Math.abs(item.qty);
+              item.stock_qty = -Math.abs(item.stock_qty);
+            });
+            
+            // Force update to reflect changes
+            this.$forceUpdate();
+          }
+          
+          // Ensure total amount is negative
+          if (this.subtotal > 0) {
+            console.log('Return has positive subtotal:', this.subtotal);
+            this.eventBus.emit('show_message', {
+              title: __(`Return total must be negative`),
+              color: 'warning'
+            });
+          }
+        }
+        
+        // For return with reference to existing invoice
+        if (this.invoice_doc.is_return && this.invoice_doc.return_against) {
+          console.log('Return doc:', this.invoice_doc);
+          console.log('Current items:', this.items);
+
+          try {
+            // Get original invoice items for comparison
+            const original_items = await new Promise((resolve, reject) => {
+              frappe.call({
+                method: 'frappe.client.get',
+                args: {
+                  doctype: 'Sales Invoice',
+                  name: this.invoice_doc.return_against
+                },
+                callback: (r) => {
+                  if (r.message) {
+                    console.log('Original invoice data:', r.message);
+                    resolve(r.message.items || []);
+                  } else {
+                    reject(new Error('Original invoice not found'));
+                  }
+                }
+              });
+            });
+
+            console.log('Original invoice items:', original_items);
+            
+            // Validate each return item
+            for (const item of this.items) {
+              console.log('Validating return item:', {
+                item_code: item.item_code,
+                rate: item.rate,
+                qty: item.qty
+              });
+
+              // Normalize item codes by trimming and converting to uppercase
+              const normalized_return_item_code = item.item_code.trim().toUpperCase();
+
+              // Find matching item in original invoice
+              const original_item = original_items.find(orig =>
+                orig.item_code.trim().toUpperCase() === normalized_return_item_code
+              );
+
+              if (!original_item) {
+                console.log('Item not found in original invoice:', {
+                  return_item_code: normalized_return_item_code,
+                  original_items: original_items.map(i => i.item_code.trim().toUpperCase())
+                });
+
+                this.eventBus.emit('show_message', {
+                  title: __(`Item ${item.item_code} not found in original invoice`),
+                  color: 'error'
+                });
+                return false;
+              }
+
+              // Compare rates with precision
+              const rate_diff = Math.abs(original_item.rate - item.rate);
+              console.log('Rate comparison:', {
+                return_rate: item.rate,
+                orig_rate: original_item.rate,
+                difference: rate_diff
+              });
+
+              if (rate_diff > 0.01) {
+                this.eventBus.emit('show_message', {
+                  title: __(`Rate mismatch for item ${item.item_code}`),
+                  color: 'error'
+                });
+                return false;
+              }
+
+              // Compare quantities
+              const return_qty = Math.abs(item.qty);
+              const orig_qty = original_item.qty;
+              console.log('Quantity comparison:', {
+                return_qty: return_qty,
+                orig_qty: orig_qty
+              });
+
+              if (return_qty > orig_qty) {
+                this.eventBus.emit('show_message', {
+                  title: __(`Return quantity cannot be greater than original quantity for item ${item.item_code}`),
+                  color: 'error'
+                });
+                return false;
+              }
+            }
+          } catch (error) {
+            console.error('Error in validation:', error);
+            this.eventBus.emit('show_message', {
+              title: __(`Error validating return: ${error.message}`),
+              color: 'error'
+            });
+            return false;
+          }
+        }
+        
+        // Validate customer is selected
+        if (!this.customer) {
+          this.eventBus.emit('show_message', {
+            title: __(`Please select a customer`),
+            color: 'error'
+          });
+          return false;
+        }
+        
+        // Additional validations can be added here
+        
+        // All validations passed
+        return true;
+      } catch (error) {
+        console.error('Error in general validation:', error);
+        this.eventBus.emit('show_message', {
+          title: __(`Error during validation: ${error.message}`),
+          color: 'error'
+        });
+        return false;
       }
-      return true;
     },
 
     // Get draft invoices from backend
@@ -4190,6 +4208,15 @@ export default {
       
       syncing();
     },
+
+    // Keyboard shortcut: submit invoice
+    shortSubmitInvoice(e) {
+      if ((e.key === "Enter" || e.keyCode === 13) && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        console.log('Keyboard shortcut triggered: Ctrl+Enter or Cmd+Enter for invoice submission');
+        this.show_payment();
+      }
+    },
   },
 
   mounted() {
@@ -4342,6 +4369,7 @@ export default {
     document.addEventListener("keydown", this.shortDeleteFirstItem.bind(this));
     document.addEventListener("keydown", this.shortOpenFirstItem.bind(this));
     document.addEventListener("keydown", this.shortSelectDiscount.bind(this));
+    document.addEventListener("keydown", this.shortSubmitInvoice.bind(this));
   },
   // Remove global keyboard shortcuts when component is unmounted
   unmounted() {
@@ -4349,6 +4377,7 @@ export default {
     document.removeEventListener("keydown", this.shortDeleteFirstItem);
     document.removeEventListener("keydown", this.shortOpenFirstItem);
     document.removeEventListener("keydown", this.shortSelectDiscount);
+    document.removeEventListener("keydown", this.shortSubmitInvoice);
   },
   // Vue watchers for reactive data changes
   watch: {
@@ -4547,5 +4576,24 @@ export default {
   font-weight: bold;
   border-bottom-left-radius: 8px;
   z-index: 1;
+}
+
+/* Pay button styling */
+.pay-button {
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2) !important;
+  transition: all 0.3s ease !important;
+  letter-spacing: 1px !important;
+  border-radius: 8px !important;
+  position: relative;
+  overflow: hidden;
+}
+
+.pay-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3) !important;
+}
+
+.pay-button:active {
+  transform: translateY(1px);
 }
 </style>
