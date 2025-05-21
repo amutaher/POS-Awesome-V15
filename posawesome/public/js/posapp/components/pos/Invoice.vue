@@ -1505,20 +1505,25 @@ export default {
 
     // Update invoice in backend
     update_invoice(doc) {
-      var vm = this;
-      frappe.call({
-        method: "posawesome.posawesome.api.posapp.update_invoice",
-        args: {
-          data: doc,
-        },
-        async: false,
-        callback: function (r) {
-          if (r.message) {
-            vm.invoice_doc = r.message;
+      return new Promise((resolve, reject) => {
+        frappe.call({
+          method: "posawesome.posawesome.api.posapp.update_invoice",
+          args: {
+            data: doc,
+          },
+          callback: (r) => {
+            if (r.message) {
+              this.invoice_doc = r.message;
+              resolve(r.message);
+            } else {
+              reject(new Error("Failed to update invoice"));
+            }
+          },
+          error: (err) => {
+            reject(err);
           }
-        },
+        });
       });
-      return this.invoice_doc;
     },
 
     // Update invoice from order in backend
@@ -1546,39 +1551,36 @@ export default {
 
     // Process and save invoice (handles update or create)
     process_invoice() {
-      const doc = this.get_invoice_doc();
-      if (doc.name) {
-        try {
-          const updated_doc = this.update_invoice(doc);
-          // Update posting date after invoice update
-          if (updated_doc && updated_doc.posting_date) {
-            this.posting_date = updated_doc.posting_date;
-          }
-          return updated_doc;
-        } catch (error) {
-          console.error('Error in process_invoice:', error);
-          this.eventBus.emit('show_message', {
-            title: __(error.message || 'Error processing invoice'),
-            color: 'error'
-          });
-          return false;
+      try {
+        const doc = this.get_invoice_doc();
+        if (!doc) {
+          throw new Error('Failed to create invoice document');
         }
-      } else {
-        try {
-          const updated_doc = this.update_invoice(doc);
-          // Update posting date after invoice creation
-          if (updated_doc && updated_doc.posting_date) {
-            this.posting_date = updated_doc.posting_date;
-          }
-          return updated_doc;
-        } catch (error) {
-          console.error('Error in process_invoice:', error);
-          this.eventBus.emit('show_message', {
-            title: __(error.message || 'Error processing invoice'),
-            color: 'error'
-          });
-          return false;
+
+        let updated_doc;
+        // Whether updating or creating new invoice, use same logic
+        if (this.isOffline) {
+          // For offline mode, just return the doc without server call
+          updated_doc = doc;
+        } else {
+          // For online mode, update the invoice on server
+          updated_doc = this.update_invoice(doc);
         }
+        
+        // Update posting date after invoice update
+        if (updated_doc && updated_doc.posting_date) {
+          this.posting_date = updated_doc.posting_date;
+        }
+        
+        return updated_doc;
+        
+      } catch (error) {
+        console.error('Error in process_invoice:', error);
+        this.eventBus.emit('show_message', {
+          title: __(error.message || 'Error processing invoice'),
+          color: 'error'
+        });
+        return null;
       }
     },
 
@@ -1651,8 +1653,17 @@ export default {
           }
 
           // Perform basic validation (limited in offline mode)
-          const isValid = this.validate();
-          if (!isValid) {
+          try {
+            const isValid = await this.validate();
+            if (!isValid) {
+              return;
+            }
+          } catch (error) {
+            console.error('Validation error:', error);
+            this.eventBus.emit("show_message", {
+              title: __("Validation error: ") + (error.message || "Unknown error"),
+              color: "error"
+            });
             return;
           }
           
@@ -1684,8 +1695,18 @@ export default {
         }
 
         console.log('Basic validations passed, proceeding to main validation');
-        const isValid = this.validate();
-        console.log('Main validation result:', isValid);
+        let isValid = false;
+        try {
+          isValid = await this.validate();
+          console.log('Main validation result:', isValid);
+        } catch (error) {
+          console.error('Validation error:', error);
+          this.eventBus.emit("show_message", {
+            title: __("Validation error: ") + (error.message || "Unknown error"),
+            color: "error"
+          });
+          return;
+        }
 
         if (!isValid) {
           console.log('Main validation failed');
@@ -1698,7 +1719,7 @@ export default {
           invoice_doc = await this.process_invoice_from_order();
         } else {
           console.log('Processing regular invoice');
-          invoice_doc = this.process_invoice();
+          invoice_doc = await Promise.resolve(this.process_invoice());
         }
 
         if (!invoice_doc) {
@@ -2668,7 +2689,10 @@ export default {
     shortOpenPayment(e) {
       if (e.key === "s" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        this.show_payment();
+        // Use Promise catch to handle errors in async call
+        this.show_payment().catch(error => {
+          console.error('Error in show_payment shortcut:', error);
+        });
       }
     },
 
@@ -4232,9 +4256,12 @@ export default {
       try {
         // Prepare invoice document
         console.log('Preparing invoice for offline storage');
-        let invoiceDoc = this.invoiceType === 'Order'
-          ? await this.get_invoice_from_order_doc()
-          : this.process_invoice();
+        let invoiceDoc;
+        if (this.invoiceType === 'Order') {
+          invoiceDoc = await this.get_invoice_from_order_doc();
+        } else {
+          invoiceDoc = await Promise.resolve(this.process_invoice());
+        }
         
         if (!invoiceDoc) {
           console.error('Failed to create invoice document for offline storage');
