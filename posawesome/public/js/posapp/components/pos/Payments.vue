@@ -1667,41 +1667,67 @@ export default {
     this.$nextTick(() => {
       // Listen to various event bus events for POS actions
       this.eventBus.on("send_invoice_doc_payment", (invoice_doc) => {
-        this.invoice_doc = invoice_doc;
-        const default_payment = this.invoice_doc.payments.find(
-          (payment) => payment.default === 1
-        );
-        this.is_credit_sale = false;
-        this.is_write_off_change = false;
-        if (invoice_doc.is_return) {
-          this.is_return = true;
-          // Reset all payment amounts to zero for returns
-          invoice_doc.payments.forEach((payment) => {
-            payment.amount = 0;
-            payment.base_amount = 0;
-          });
-          // Set default payment to negative amount for returns
-          if (default_payment) {
-            const amount = invoice_doc.rounded_total || invoice_doc.grand_total;
-            default_payment.amount = -Math.abs(amount);
-            if (default_payment.base_amount !== undefined) {
-              default_payment.base_amount = -Math.abs(amount);
-            }
+        try {
+          // Validate invoice_doc to prevent errors
+          if (!invoice_doc) {
+            console.error('Invalid invoice document received', invoice_doc);
+            return;
           }
-        } else if (default_payment) {
-          // For regular invoices, set positive amount
-          default_payment.amount = this.flt(
-            invoice_doc.rounded_total || invoice_doc.grand_total,
-            this.currency_precision
-          );
+          
+          this.invoice_doc = invoice_doc;
+          
+          // Find default payment method safely
+          let default_payment = null;
+          if (this.invoice_doc.payments && Array.isArray(this.invoice_doc.payments)) {
+            default_payment = this.invoice_doc.payments.find(
+              (payment) => payment && payment.default === 1
+            );
+          } else {
+            console.warn('Invalid payments array in invoice document');
+            this.invoice_doc.payments = [];
+          }
+          
+          this.is_credit_sale = false;
+          this.is_write_off_change = false;
+          
+          if (invoice_doc.is_return) {
+            this.is_return = true;
+            // Reset all payment amounts to zero for returns
+            if (Array.isArray(invoice_doc.payments)) {
+              invoice_doc.payments.forEach((payment) => {
+                if (payment) {
+                  payment.amount = 0;
+                  payment.base_amount = 0;
+                }
+              });
+            }
+            
+            // Set default payment to negative amount for returns
+            if (default_payment) {
+              const amount = invoice_doc.rounded_total || invoice_doc.grand_total || 0;
+              default_payment.amount = -Math.abs(amount);
+              if (default_payment.base_amount !== undefined) {
+                default_payment.base_amount = -Math.abs(amount);
+              }
+            }
+          } else if (default_payment) {
+            // For regular invoices, set positive amount
+            const total = invoice_doc.rounded_total || invoice_doc.grand_total || 0;
+            default_payment.amount = this.flt(total, this.currency_precision);
+          }
+          
+          this.loyalty_amount = 0;
+          this.redeemed_customer_credit = 0;
+          
+          // Only get addresses if customer exists
+          if (invoice_doc.customer) {
+            this.get_addresses();
+          }
+          
+          this.get_sales_person_names();
+        } catch (error) {
+          console.error('Error processing invoice document in payment component:', error);
         }
-        this.loyalty_amount = 0;
-        this.redeemed_customer_credit = 0;
-        // Only get addresses if customer exists
-        if (invoice_doc.customer) {
-          this.get_addresses();
-        }
-        this.get_sales_person_names();
       });
       this.eventBus.on("register_pos_profile", (data) => {
         this.pos_profile = data.pos_profile;

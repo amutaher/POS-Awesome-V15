@@ -94,16 +94,24 @@ export default {
     },
 
     submit_dialog() {
-
-      if (this.selected.length > 0) {
-        this.eventBus.emit('load_invoice', this.selected[0]);
-        this.draftsDialog = false;
-      }
-      else {
-        this.eventBus.emit("show_message", {
-          title: `Select an invoice to load`,
-          color: "error",
-        });
+      try {
+        if (this.selected.length > 0) {
+          // Use safer emission pattern
+          try {
+            this.eventBus.emit('load_invoice', this.selected[0]);
+          } catch (emitError) {
+            console.error('Error emitting load_invoice event:', emitError);
+            alert('Error loading invoice. Please try again.');
+          }
+          this.draftsDialog = false;
+        }
+        else {
+          // Use alert instead of eventBus emit for error message
+          alert(`Select an invoice to load`);
+        }
+      } catch (error) {
+        console.error('Error in submit_dialog:', error);
+        alert('An error occurred while loading the invoice. Please try again.');
       }
     },
   },
