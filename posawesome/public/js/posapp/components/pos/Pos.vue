@@ -352,18 +352,41 @@ export default {
     window.addEventListener('offline', this.updateOnlineStatus);
     
     this.$nextTick(function () {
+      // Ensure event bus is properly initialized
+      if (!this.eventBus) {
+        console.error('Event bus not initialized in Pos.vue');
+        return;
+      }
+
       this.check_opening_entry();
       this.get_pos_setting();
       
+      // Add error handling for event listeners
+      const safeEmit = (event, data) => {
+        try {
+          if (this.eventBus && typeof this.eventBus.emit === 'function') {
+            this.eventBus.emit(event, data);
+          } else {
+            console.error(`Event bus not properly initialized for event: ${event}`);
+          }
+        } catch (error) {
+          console.error(`Error emitting event ${event}:`, error);
+        }
+      };
+
       this.eventBus.on('close_opening_dialog', () => {
         this.dialog = false;
       });
       
       this.eventBus.on('register_pos_data', (data) => {
+        if (!data) {
+          console.error('Invalid data received in register_pos_data event');
+          return;
+        }
         this.pos_profile = data.pos_profile;
         this.get_offers(this.pos_profile.name);
         this.pos_opening_shift = data.pos_opening_shift;
-        this.eventBus.emit('register_pos_profile', data);
+        safeEmit('register_pos_profile', data);
         console.info('LoadPosProfile');
         
         // Cache POS profile for offline use
@@ -377,9 +400,13 @@ export default {
       });
       
       this.eventBus.on('show_payment', (data) => {
-        this.payment = data === 'true';
-        this.offers = false;
-        this.coupons = false;
+        try {
+          this.payment = data === 'true';
+          this.offers = false;
+          this.coupons = false;
+        } catch (error) {
+          console.error('Error handling show_payment event:', error);
+        }
       });
       
       this.eventBus.on('show_offers', (data) => {

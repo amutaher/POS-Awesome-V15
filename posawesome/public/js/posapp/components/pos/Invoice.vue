@@ -1597,6 +1597,15 @@ export default {
       try {
         console.log('Starting show_payment process');
 
+        if (!this.eventBus) {
+          console.error('Event bus not initialized');
+          this.eventBus.emit("show_message", {
+            title: __("System error: Event bus not initialized"),
+            color: "error",
+          });
+          return;
+        }
+
         if (!this.customer) {
           console.log('Customer validation failed');
           this.eventBus.emit("show_message", {
@@ -1727,15 +1736,23 @@ export default {
         }
 
         console.log('Showing payment dialog with currency:', invoice_doc.currency);
-        this.eventBus.emit("show_payment", "true");
-        this.eventBus.emit("send_invoice_doc_payment", invoice_doc);
+        
+        // Ensure event bus is still valid before emitting
+        if (this.eventBus && typeof this.eventBus.emit === 'function') {
+          this.eventBus.emit("show_payment", "true");
+          this.eventBus.emit("send_invoice_doc_payment", invoice_doc);
+        } else {
+          throw new Error('Event bus not properly initialized');
+        }
 
       } catch (error) {
         console.error('Error in show_payment:', error);
-        this.eventBus.emit("show_message", {
-          title: __("Error processing payment: ") + (error.message || "Unknown error"),
-          color: "error"
-        });
+        if (this.eventBus && typeof this.eventBus.emit === 'function') {
+          this.eventBus.emit("show_message", {
+            title: __("Error processing payment: ") + (error.message || "Unknown error"),
+            color: "error"
+          });
+        }
       }
     },
 
