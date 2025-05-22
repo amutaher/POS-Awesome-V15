@@ -3122,6 +3122,11 @@ util-deprecate@^1.0.2:
   resolved "https://registry.npmjs.org/util-deprecate/-/util-deprecate-1.0.2.tgz"
   integrity sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==
 
+uuid@^9.0.1:
+  version "9.0.1"
+  resolved "https://registry.npmjs.org/uuid/-/uuid-9.0.1.tgz"
+  integrity sha512-b+1eJOlsR9K8HJpow9Ok3fiWOWSIcIzXodvv0rQjVoOVNpWMpxf1wZNpt4y9h10odCNrqnYp1OBzRktckBe3sA==
+
 vite-plugin-pwa@^1.0.0:
   version "1.0.0"
   resolved "https://registry.npmjs.org/vite-plugin-pwa/-/vite-plugin-pwa-1.0.0.tgz"
@@ -3255,7 +3260,7 @@ word-wrap@^1.2.5:
   resolved "https://registry.npmjs.org/word-wrap/-/word-wrap-1.2.5.tgz"
   integrity sha512-BN22B5eaMMI9UMtjrGd5g5eCYPpCPDUy0FJXbYsaT5zYxjFOckS53SQDE3pWkVoWpHXVb3BrYcEN4Twa55B5cA==
 
-workbox-background-sync@7.3.0:
+workbox-background-sync@^7.3.0, workbox-background-sync@7.3.0:
   version "7.3.0"
   resolved "https://registry.npmjs.org/workbox-background-sync/-/workbox-background-sync-7.3.0.tgz"
   integrity sha512-PCSk3eK7Mxeuyatb22pcSx9dlgWNv3+M8PqPaYDokks8Y5/FX4soaOqj3yhAZr5k6Q5JWTOMYgaJBpbw11G9Eg==
@@ -3313,7 +3318,7 @@ workbox-build@^7.3.0:
     workbox-sw "7.3.0"
     workbox-window "7.3.0"
 
-workbox-cacheable-response@7.3.0:
+workbox-cacheable-response@^7.3.0, workbox-cacheable-response@7.3.0:
   version "7.3.0"
   resolved "https://registry.npmjs.org/workbox-cacheable-response/-/workbox-cacheable-response-7.3.0.tgz"
   integrity sha512-eAFERIg6J2LuyELhLlmeRcJFa5e16Mj8kL2yCDbhWE+HUun9skRQrGIFVUagqWj4DMaaPSMWfAolM7XZZxNmxA==
@@ -3325,7 +3330,7 @@ workbox-core@7.3.0:
   resolved "https://registry.npmjs.org/workbox-core/-/workbox-core-7.3.0.tgz"
   integrity sha512-Z+mYrErfh4t3zi7NVTvOuACB0A/jA3bgxUN3PwtAVHvfEsZxV9Iju580VEETug3zYJRc0Dmii/aixI/Uxj8fmw==
 
-workbox-expiration@7.3.0:
+workbox-expiration@^7.3.0, workbox-expiration@7.3.0:
   version "7.3.0"
   resolved "https://registry.npmjs.org/workbox-expiration/-/workbox-expiration-7.3.0.tgz"
   integrity sha512-lpnSSLp2BM+K6bgFCWc5bS1LR5pAwDWbcKt1iL87/eTSJRdLdAwGQznZE+1czLgn/X05YChsrEegTNxjM067vQ==
@@ -3378,14 +3383,14 @@ workbox-recipes@7.3.0:
     workbox-routing "7.3.0"
     workbox-strategies "7.3.0"
 
-workbox-routing@7.3.0:
+workbox-routing@^7.3.0, workbox-routing@7.3.0:
   version "7.3.0"
   resolved "https://registry.npmjs.org/workbox-routing/-/workbox-routing-7.3.0.tgz"
   integrity sha512-ZUlysUVn5ZUzMOmQN3bqu+gK98vNfgX/gSTZ127izJg/pMMy4LryAthnYtjuqcjkN4HEAx1mdgxNiKJMZQM76A==
   dependencies:
     workbox-core "7.3.0"
 
-workbox-strategies@7.3.0:
+workbox-strategies@^7.3.0, workbox-strategies@7.3.0:
   version "7.3.0"
   resolved "https://registry.npmjs.org/workbox-strategies/-/workbox-strategies-7.3.0.tgz"
   integrity sha512-tmZydug+qzDFATwX7QiEL5Hdf7FrkhjaF9db1CbB39sDmEZJg3l9ayDvPxy8Y18C3Y66Nrr9kkN1f/RlkDgllg==

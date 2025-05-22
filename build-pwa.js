@@ -22,15 +22,40 @@ try {
     process.exit(1);
   }
   
-  // Install dependencies if node_modules doesn't exist
-  if (!fs.existsSync(path.join(PWA_ROOT_DIR, 'node_modules'))) {
-    console.log('Installing dependencies...');
-    execSync('yarn install', { stdio: 'inherit', cwd: PWA_ROOT_DIR });
+  // Install dependencies if node_modules doesn't exist or if uuid is missing
+  if (!fs.existsSync(path.join(PWA_ROOT_DIR, 'node_modules')) || 
+      !fs.existsSync(path.join(PWA_ROOT_DIR, 'node_modules/uuid'))) {
+    console.log('Installing or updating dependencies...');
+    
+    try {
+      // First try yarn
+      execSync('yarn install', { stdio: 'inherit', cwd: PWA_ROOT_DIR });
+    } catch (e) {
+      // If yarn fails, try npm
+      console.log('Yarn failed, trying npm install...');
+      execSync('npm install', { stdio: 'inherit', cwd: PWA_ROOT_DIR });
+    }
+    
+    // Verify uuid is installed
+    if (!fs.existsSync(path.join(PWA_ROOT_DIR, 'node_modules/uuid'))) {
+      console.log('Installing uuid package specifically...');
+      try {
+        execSync('npm install uuid', { stdio: 'inherit', cwd: PWA_ROOT_DIR });
+      } catch (e) {
+        console.error('Failed to install uuid package:', e);
+        process.exit(1);
+      }
+    }
   }
   
   // Run build command
   console.log('Building frontend assets...');
-  execSync('yarn build', { stdio: 'inherit', cwd: PWA_ROOT_DIR });
+  try {
+    execSync('npm run build', { stdio: 'inherit', cwd: PWA_ROOT_DIR });
+  } catch (e) {
+    console.log('npm build failed, trying direct vite build...');
+    execSync('npx vite build', { stdio: 'inherit', cwd: PWA_ROOT_DIR });
+  }
   
   // Copy necessary files from dist to public
   if (fs.existsSync(DIST_DIR)) {
@@ -48,11 +73,10 @@ try {
     }
     
     // Copy workbox files if they exist
-    const workboxDir = path.join(DIST_DIR, 'workbox-');
-    if (fs.existsSync(workboxDir)) {
-      const workboxFiles = fs.readdirSync(DIST_DIR)
-        .filter(file => file.startsWith('workbox-'));
-      
+    const workboxFiles = fs.readdirSync(DIST_DIR)
+      .filter(file => file.startsWith('workbox-'));
+    
+    if (workboxFiles.length > 0) {
       workboxFiles.forEach(file => {
         fs.copyFileSync(
           path.join(DIST_DIR, file),
