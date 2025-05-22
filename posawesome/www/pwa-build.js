@@ -20,12 +20,20 @@ try {
   // Set NODE_ENV to production to avoid development warnings
   process.env.NODE_ENV = 'production';
   
-  // Run the build command with full path to ensure correct resolution
-  const rootDir = path.resolve(__dirname, '../../..');
+  // Get the app directory (where package.json is located)
+  const appDir = path.resolve(__dirname, '../..');
+  console.log(`Using app directory: ${appDir}`);
   
-  execSync('yarn build:pwa', { 
+  // Check if package.json exists
+  if (!fs.existsSync(path.join(appDir, 'package.json'))) {
+    console.error(`ERROR: package.json not found in ${appDir}`);
+    process.exit(1);
+  }
+  
+  // Run build command directly with npx to avoid yarn path issues
+  execSync('npx vite build', { 
     stdio: 'inherit',
-    cwd: rootDir,
+    cwd: appDir,
     env: { ...process.env, FORCE_COLOR: true }
   });
   

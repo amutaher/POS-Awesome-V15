@@ -1,14 +1,13 @@
-// Import Workbox core modules from workbox-precaching package
-// This will be replaced by the injectManifest plugin during build
+// This is a simple service worker for POS Awesome
+// It will be processed by the workbox build process
 
-import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching';
+// This will be replaced with precacheAndRoute from workbox-precaching
+// during the build process
+self.__WB_MANIFEST;
 
-// Use Workbox precaching to automatically handle cache versioning
-// self.__WB_MANIFEST is injected by the Workbox build process
-precacheAndRoute(self.__WB_MANIFEST || []);
-
-// Clean up any outdated caches from previous versions
-cleanupOutdatedCaches();
+// Cache names
+const STATIC_CACHE_NAME = 'pos-awesome-static-cache';
+const API_CACHE_NAME = 'pos-awesome-api-cache';
 
 // List of additional assets to cache for offline functionality
 const ASSETS_TO_CACHE = [
@@ -36,20 +35,6 @@ const ASSETS_TO_CACHE = [
   '/assets/posawesome/js/posapp/components/offline/SyncStatus.vue'
 ];
 
-// Cache additional assets
-self.addEventListener('install', (event) => {
-  console.log('[Service Worker] Install');
-  
-  event.waitUntil(
-    caches.open('pos-awesome-assets-cache')
-      .then((cache) => {
-        console.log('[Service Worker] Caching additional assets');
-        return cache.addAll(ASSETS_TO_CACHE);
-      })
-      .then(() => self.skipWaiting())
-  );
-});
-
 // API endpoints to cache for offline use
 const API_ROUTES_TO_CACHE = [
   '/api/method/posawesome.posawesome.api.posapp.get_items',
@@ -72,10 +57,42 @@ const API_ROUTES_TO_CACHE = [
   '/api/method/posawesome.posawesome.api.posapp.check_opening_shift'
 ];
 
-// Activate event - claim clients immediately
+// Cache additional assets on install
+self.addEventListener('install', (event) => {
+  console.log('[Service Worker] Install');
+  
+  // Skip waiting to activate immediately
+  self.skipWaiting();
+  
+  event.waitUntil(
+    caches.open(STATIC_CACHE_NAME)
+      .then((cache) => {
+        console.log('[Service Worker] Caching additional assets');
+        return cache.addAll(ASSETS_TO_CACHE);
+      })
+  );
+});
+
+// Clean up old caches on activate
 self.addEventListener('activate', (event) => {
   console.log('[Service Worker] Activate');
-  event.waitUntil(self.clients.claim());
+  
+  event.waitUntil(
+    // Clean up old cache versions
+    caches.keys().then((cacheNames) => {
+      return Promise.all(
+        cacheNames.map((cacheName) => {
+          if (cacheName !== STATIC_CACHE_NAME && cacheName !== API_CACHE_NAME) {
+            console.log('[Service Worker] Deleting old cache:', cacheName);
+            return caches.delete(cacheName);
+          }
+        })
+      );
+    }).then(() => {
+      // Claim clients so the service worker is in control immediately
+      return self.clients.claim();
+    })
+  );
 });
 
 // Network-first strategy for API calls with fallback to cache
@@ -87,7 +104,7 @@ async function networkFirstWithCacheFallback(request) {
     // If successful, clone and cache the response
     if (networkResponse && networkResponse.status === 200) {
       const responseToCache = networkResponse.clone();
-      const cache = await caches.open('pos-awesome-api-cache');
+      const cache = await caches.open(API_CACHE_NAME);
       await cache.put(request, responseToCache);
     }
     
@@ -141,7 +158,7 @@ async function cacheFirstWithNetworkFallback(request) {
     
     // Don't cache socket.io connections
     if (!request.url.includes('socket.io')) {
-      const cache = await caches.open('pos-awesome-assets-cache');
+      const cache = await caches.open(STATIC_CACHE_NAME);
       await cache.put(request, responseToCache);
     }
     
@@ -235,7 +252,7 @@ self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'CACHE_DYNAMIC_URLS') {
     const urls = event.data.urls;
     if (urls && urls.length) {
-      caches.open('pos-awesome-assets-cache')
+      caches.open(STATIC_CACHE_NAME)
         .then(cache => {
           console.log('[Service Worker] Caching dynamic URLs:', urls);
           return cache.addAll(urls);
