@@ -6,7 +6,17 @@ frappe.pages['posapp'].on_page_load = function (wrapper) {
 		single_column: true
 	});
 
-	this.page.$PosApp = new frappe.PosApp.posapp(this.page);
+	if (frappe.PosApp && frappe.PosApp.posapp) {
+		this.page.$PosApp = new frappe.PosApp.posapp(this.page);
+	} else {
+		console.error("POS Awesome app not properly loaded. Please check if all JavaScript files are loaded correctly.");
+		frappe.msgprint({
+			title: __('Error'),
+			indicator: 'red',
+			message: __('POS Awesome app not properly loaded. Please contact your system administrator.')
+		});
+		return;
+	}
 
 	$('div.navbar-fixed-top').find('.container').css('padding', '0');
 
