@@ -1,32 +1,10 @@
-const CACHE_NAME = 'pos-awesome-cache-v3';
+// Import Workbox
+importScripts('https://storage.googleapis.com/workbox-cdn/releases/6.5.4/workbox-sw.js');
 
-// List of assets to cache for offline functionality
-const ASSETS_TO_CACHE = [
-  '/app/posapp',
-  '/assets/posawesome/js/posapp/posapp.js',
-  '/assets/posawesome/js/posapp/Home.vue',
-  '/assets/posawesome/js/posapp/components/Navbar.vue',
-  '/assets/posawesome/js/posapp/components/pos/Pos.vue',
-  '/assets/posawesome/js/posapp/components/pos/Invoice.vue',
-  '/assets/posawesome/js/posapp/components/pos/ItemsSelector.vue',
-  '/assets/posawesome/js/posapp/components/pos/Payments.vue',
-  '/assets/posawesome/js/posapp/components/pos/Customer.vue',
-  '/assets/posawesome/js/posapp/components/pos/CustomerSelector.vue',
-  '/assets/posawesome/js/posapp/components/pos/pos.png',
-  '/assets/posawesome/js/posapp/services/offlineStorage.js',
-  '/assets/posawesome/js/posapp/services/networkDetector.js',
-  '/assets/posawesome/icons/icon-72x72.png',
-  '/assets/posawesome/icons/icon-144x144.png',
-  '/assets/posawesome/icons/icon-192x192.png',
-  '/assets/posawesome/icons/icon-512x512.png',
-  '/assets/posawesome/node_modules/vuetify/dist/vuetify.min.css',
-  'https://cdn.jsdelivr.net/npm/@mdi/font@6.x/css/materialdesignicons.min.css',
-  'https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900',
-  '/assets/posawesome/js/posapp/components/offline/OfflineBanner.vue',
-  '/assets/posawesome/js/posapp/components/offline/SyncStatus.vue'
-];
+// Use workbox core and precaching modules
+const { precacheAndRoute, cleanupOutdatedCaches } = workbox.precaching;
 
-// API endpoints to cache for offline use
+// Assets to be precached and API routes to cache for offline use
 const API_ROUTES_TO_CACHE = [
   '/api/method/posawesome.posawesome.api.posapp.get_items',
   '/api/method/posawesome.posawesome.api.posapp.get_customers',
@@ -48,36 +26,35 @@ const API_ROUTES_TO_CACHE = [
   '/api/method/posawesome.posawesome.api.posapp.check_opening_shift'
 ];
 
-// Install event - caches assets for offline use
-self.addEventListener('install', (event) => {
-  console.log('[Service Worker] Install');
-  
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('[Service Worker] Caching app shell and assets');
-        return cache.addAll(ASSETS_TO_CACHE);
-      })
-      .then(() => self.skipWaiting())
-  );
-});
+// Precache all assets specified in the manifest
+// This will be auto-populated during build time with the correct file versions
+precacheAndRoute(self.__WB_MANIFEST || [
+  // Fallback assets list if __WB_MANIFEST is not available
+  { url: '/app/posapp', revision: null },
+  { url: '/assets/posawesome/js/posapp/posapp.js', revision: null },
+  { url: '/assets/posawesome/js/posapp/Home.vue', revision: null },
+  { url: '/assets/posawesome/js/posapp/components/Navbar.vue', revision: null },
+  { url: '/assets/posawesome/js/posapp/components/pos/Pos.vue', revision: null },
+  { url: '/assets/posawesome/js/posapp/components/pos/Invoice.vue', revision: null },
+  { url: '/assets/posawesome/js/posapp/components/pos/ItemsSelector.vue', revision: null },
+  { url: '/assets/posawesome/js/posapp/components/pos/Payments.vue', revision: null },
+  { url: '/assets/posawesome/js/posapp/components/pos/Customer.vue', revision: null },
+  { url: '/assets/posawesome/js/posapp/components/pos/CustomerSelector.vue', revision: null },
+  { url: '/assets/posawesome/js/posapp/components/pos/pos.png', revision: null },
+  { url: '/assets/posawesome/js/posapp/services/offlineStorage.js', revision: null },
+  { url: '/assets/posawesome/js/posapp/services/networkDetector.js', revision: null },
+  { url: '/assets/posawesome/icons/icon-72x72.png', revision: null },
+  { url: '/assets/posawesome/icons/icon-144x144.png', revision: null },
+  { url: '/assets/posawesome/icons/icon-192x192.png', revision: null },
+  { url: '/assets/posawesome/icons/icon-512x512.png', revision: null },
+  { url: 'https://cdn.jsdelivr.net/npm/@mdi/font@6.x/css/materialdesignicons.min.css', revision: null },
+  { url: 'https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900', revision: null },
+  { url: '/assets/posawesome/js/posapp/components/offline/OfflineBanner.vue', revision: null },
+  { url: '/assets/posawesome/js/posapp/components/offline/SyncStatus.vue', revision: null }
+]);
 
-// Activate event - cleans up old caches
-self.addEventListener('activate', (event) => {
-  console.log('[Service Worker] Activate');
-  
-  event.waitUntil(
-    caches.keys().then((keyList) => {
-      return Promise.all(keyList.map((key) => {
-        if (key !== CACHE_NAME) {
-          console.log('[Service Worker] Removing old cache', key);
-          return caches.delete(key);
-        }
-      }));
-    })
-    .then(() => self.clients.claim())
-  );
-});
+// Clean up outdated caches
+cleanupOutdatedCaches();
 
 // Network-first strategy for API calls with fallback to cache
 async function networkFirstWithCacheFallback(request) {
@@ -88,7 +65,7 @@ async function networkFirstWithCacheFallback(request) {
     // If successful, clone and cache the response
     if (networkResponse && networkResponse.status === 200) {
       const responseToCache = networkResponse.clone();
-      const cache = await caches.open(CACHE_NAME);
+      const cache = await caches.open(workbox.core.cacheNames.runtime);
       await cache.put(request, responseToCache);
     }
     
@@ -142,7 +119,7 @@ async function cacheFirstWithNetworkFallback(request) {
     
     // Don't cache socket.io connections
     if (!request.url.includes('socket.io')) {
-      const cache = await caches.open(CACHE_NAME);
+      const cache = await caches.open(workbox.core.cacheNames.runtime);
       await cache.put(request, responseToCache);
     }
     
@@ -236,7 +213,7 @@ self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'CACHE_DYNAMIC_URLS') {
     const urls = event.data.urls;
     if (urls && urls.length) {
-      caches.open(CACHE_NAME)
+      caches.open(workbox.core.cacheNames.runtime)
         .then(cache => {
           console.log('[Service Worker] Caching dynamic URLs:', urls);
           return cache.addAll(urls);

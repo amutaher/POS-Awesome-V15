@@ -45,7 +45,8 @@
 30. Search and add items by Batch Number
 31. Accept new payments from customers against existing invoices
 32. Payments Reconciliation
-33. A lot more bug fixes from the version 14
+33. Automatic cache versioning for PWA using Workbox
+34. A lot more bug fixes from the version 14
 
 ### How to Install
 

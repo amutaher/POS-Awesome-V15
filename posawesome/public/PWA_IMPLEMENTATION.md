@@ -11,6 +11,7 @@ This document outlines the Progressive Web App (PWA) implementation for POS Awes
 5. **Offline Invoice Submission**: Ability to create and queue invoices while offline
 6. **Background Sync**: Automatic synchronization of queued data when coming back online
 7. **Install Prompt**: User-friendly prompt to install the PWA
+8. **Automatic Cache Versioning**: Implemented Workbox precaching for automatic cache management
 
 ## How Offline Mode Works
 
@@ -58,19 +59,25 @@ The offline functionality is implemented through several key components:
    - Provides offline fallbacks
    - Manages background sync
 
-2. **OfflineStorage Class (`offlineStorage.js`)**:
+2. **Workbox Integration**:
+   - Automatic cache versioning using precacheAndRoute
+   - Clean up of outdated caches with cleanupOutdatedCaches
+   - Build-time asset versioning with __WB_MANIFEST
+   - Configured with vite-plugin-pwa for production builds
+
+3. **OfflineStorage Class (`offlineStorage.js`)**:
    - Wrapper around IndexedDB
    - Provides methods for CRUD operations
    - Handles data caching and retrieval
    - Manages pending invoice queue
 
-3. **POS Component (`Pos.vue`)**:
+4. **POS Component (`Pos.vue`)**:
    - Initializes offline storage
    - Detects online/offline status
    - Caches necessary data when online
    - Provides offline UI indicators
 
-4. **Invoice Component (`Invoice.vue`)**:
+5. **Invoice Component (`Invoice.vue`)**:
    - Adapts submission process based on connectivity
    - Queues invoices for offline use
    - Shows appropriate status messages
@@ -152,23 +159,10 @@ async processPendingInvoices() {
 }
 ```
 
-## Troubleshooting
-
-1. **App doesn't work offline**: Make sure you've used the app online first to cache data
-2. **Sync doesn't work**: Check browser console for errors and ensure service worker is registered
-3. **Data not loading**: Verify IndexedDB is available and not blocked
-
-## Further Improvements
-
-1. **Push Notifications**: Implement push notifications for important events
-2. **Offline Payments**: Add support for offline payment methods
-3. **Conflict Resolution**: Improve handling of sync conflicts
-4. **Periodic Sync**: Implement periodic background syncing for data freshness
-5. **Workbox Integration**: Use Google's Workbox library for more advanced service worker features
-
 ## Resources
 
 - [MDN Web Docs: Progressive Web Apps](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps)
 - [Google Web Fundamentals: Service Workers](https://developers.google.com/web/fundamentals/primers/service-workers)
 - [IndexedDB API](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API)
-- [Workbox](https://developers.google.com/web/tools/workbox) 
+- [Workbox Documentation](https://developer.chrome.com/docs/workbox/)
+- [Workbox GitHub](https://github.com/GoogleChrome/workbox)
