@@ -546,4 +546,25 @@ export default class OfflineStorage {
       this.db = null;
     }
   }
+
+  /**
+   * Cache sales persons data for offline use
+   * @param {Array} salesPersons Array of sales persons objects
+   * @returns {Promise} Promise that resolves when caching is complete
+   */
+  cacheSalesPersons(salesPersons) {
+    if (!Array.isArray(salesPersons) || salesPersons.length === 0) {
+      return Promise.resolve(false);
+    }
+    
+    return this.saveMultipleData('salesPersons', salesPersons)
+      .then(() => {
+        console.log(`[OfflineStorage] Cached ${salesPersons.length} sales persons for offline use`);
+        return true;
+      })
+      .catch(error => {
+        console.error('[OfflineStorage] Error caching sales persons:', error);
+        throw error;
+      });
+  }
 } 

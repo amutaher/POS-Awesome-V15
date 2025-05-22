@@ -938,13 +938,29 @@ export default {
       
       // Check if device is offline
       if (this.isOffline) {
-        console.log('Device is offline, saving invoice locally');
+        console.log('Device is offline, saving invoice and payment locally');
         
         // Show offline processing message
         this.eventBus.emit('show_message', {
           title: __('Processing offline invoice...'),
           color: 'info'
         });
+        
+        // Prepare payment data for offline storage
+        const paymentData = {
+          total_change: !this.invoice_doc.is_return ? -this.diff_payment : 0,
+          paid_change: !this.invoice_doc.is_return ? this.paid_change : 0,
+          credit_change: -this.credit_change,
+          redeemed_customer_credit: this.redeemed_customer_credit,
+          customer_credit_dict: this.customer_credit_dict,
+          is_cashback: this.is_cashback,
+          payment_method: this.invoice_doc.payments.filter(p => p.amount > 0).map(p => p.mode_of_payment).join(', '),
+          payment_details: this.invoice_doc.payments.filter(p => p.amount !== 0),
+          offline_timestamp: new Date().toISOString()
+        };
+        
+        // Store payment data in the invoice object
+        this.invoice_doc.offline_payment_data = paymentData;
         
         // Try to save invoice offline
         this.saveInvoiceOffline();
@@ -1239,14 +1255,20 @@ export default {
       }
       this.eventBus.emit("open_new_address", this.invoice_doc.customer);
     },
-    // Get sales person names from API/localStorage
+    // Get sales person names from API/IndexedDB
     get_sales_person_names() {
       const vm = this;
-      if (vm.pos_profile.posa_local_storage && localStorage.sales_persons_storage) {
-        try {
-          vm.sales_persons = JSON.parse(localStorage.getItem("sales_persons_storage"));
-        } catch(e) {}
+      if (vm.pos_profile.posa_local_storage && window.offlineStorage) {
+        // Try to load from IndexedDB
+        window.offlineStorage.getAllData('salesPersons').then(cached => {
+          if (cached && cached.length) {
+            vm.sales_persons = cached;
+          }
+        }).catch(err => {
+          console.error('Error loading sales persons from IndexedDB:', err);
+        });
       }
+      
       frappe.call({
         method: "posawesome.posawesome.api.posapp.get_sales_person_names",
         callback: function (r) {
@@ -1257,8 +1279,9 @@ export default {
               sales_person_name: sp.sales_person_name,
               name: sp.name
             }));
-            if (vm.pos_profile.posa_local_storage) {
-              localStorage.setItem("sales_persons_storage", JSON.stringify(vm.sales_persons));
+            if (vm.pos_profile.posa_local_storage && window.offlineStorage) {
+              // Cache sales persons in IndexedDB
+              window.offlineStorage.cacheSalesPersons(vm.sales_persons);
             }
           } else {
             vm.sales_persons = [];
@@ -1460,24 +1483,15 @@ export default {
         this.isOffline = !status.isOnline;
       });
     },
-    
     // Initialize offline storage
     async initOfflineStorage() {
       // Use global offlineStorage instance if available
       if (window.offlineStorage) {
         this.offlineStorage = window.offlineStorage;
       } else {
-        // Otherwise create a new instance
-        try {
-          const OfflineStorage = (await import('../../services/offlineStorage.js')).default;
-          this.offlineStorage = new OfflineStorage('posAwesomeDB', 1);
-          await this.offlineStorage.init();
-        } catch (error) {
-          console.error('Failed to initialize offline storage:', error);
-        }
+        console.error('Global offlineStorage is not available');
       }
     },
-    
     // Handle saving invoice to offline storage
     async saveInvoiceOffline() {
       if (!this.offlineStorage) {
@@ -1498,7 +1512,7 @@ export default {
           offline_timestamp: new Date().toISOString()
         };
         
-        // Add payment data
+        // Add enhanced payment data with more information for syncing
         const paymentData = {
           total_change: !this.invoice_doc.is_return ? -this.diff_payment : 0,
           paid_change: !this.invoice_doc.is_return ? this.paid_change : 0,
@@ -1506,6 +1520,9 @@ export default {
           redeemed_customer_credit: this.redeemed_customer_credit,
           customer_credit_dict: this.customer_credit_dict,
           is_cashback: this.is_cashback,
+          payment_method: this.invoice_doc.payments.filter(p => p.amount > 0).map(p => p.mode_of_payment).join(', '),
+          payment_details: this.invoice_doc.payments.filter(p => p.amount !== 0),
+          offline_timestamp: new Date().toISOString()
         };
         
         invoiceData.offline_payment_data = paymentData;
