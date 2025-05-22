@@ -4433,27 +4433,36 @@ export default {
     // Initialize offline storage reference
     this.initOfflineStorage();
     
-    // Add listener for payment success event
-    this.eventBus.on("payment_success", (data) => {
-      try {
-        // Show success message
-        this.eventBus.emit("show_message", {
-          title: __("Invoice {0} is Submitted Successfully", [data.invoice_name || '']),
-          color: "success",
-        });
-        
-        // Play success sound
-        frappe.utils.play_sound("submit");
-        
-        // Clear invoice and reset for new transaction
-        this.clear_invoice();
-        
-        // Reset posting date to today
-        this.posting_date = frappe.datetime.nowdate();
-        
-        console.log("Payment successfully processed, invoice cleared for new transaction");
-      } catch (error) {
-        console.error("Error handling payment success:", error);
+    // Add listener for payment completed events
+    this.eventBus.on("show_payment", (isVisible) => {
+      if (isVisible === "false" && window.lastSubmittedInvoice) {
+        try {
+          // Payment dialog was closed and we have a successful payment
+          const invoiceName = window.lastSubmittedInvoice;
+          
+          // Show success message if needed
+          this.eventBus.emit("show_message", {
+            title: __("Invoice {0} is Submitted Successfully", [invoiceName]),
+            color: "success",
+          });
+          
+          // Play success sound
+          frappe.utils.play_sound("submit");
+          
+          // Clear invoice and reset for new transaction
+          this.clear_invoice();
+          
+          // Reset posting date to today
+          this.posting_date = frappe.datetime.nowdate();
+          
+          // Clear the stored invoice reference
+          window.lastSubmittedInvoice = null;
+          window.lastSubmittedInvoiceDoc = null;
+          
+          console.log("Payment successfully processed, invoice cleared for new transaction");
+        } catch (error) {
+          console.error("Error handling payment success:", error);
+        }
       }
     });
   },
@@ -4467,8 +4476,8 @@ export default {
     this.eventBus.off("clear_invoice");
     // Cleanup reset_posting_date listener
     this.eventBus.off("reset_posting_date");
-    // Cleanup payment_success listener
-    this.eventBus.off("payment_success");
+    // Cleanup show_payment listener
+    this.eventBus.off("show_payment");
     
     // Clean up any additional resources if needed
     
