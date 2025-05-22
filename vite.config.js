@@ -55,9 +55,9 @@ export default defineConfig({
         main: resolve(__dirname, 'posawesome/public/js/posawesome.bundle.js')
       },
       output: {
-        entryFileNames: `assets/[name].[hash].js`,
-        chunkFileNames: `assets/[name].[hash].js`,
-        assetFileNames: `assets/[name].[hash].[ext]`
+        entryFileNames: `assets/main.js`,
+        chunkFileNames: `assets/[name].js`,
+        assetFileNames: `assets/main.[ext]`
       }
     }
   },

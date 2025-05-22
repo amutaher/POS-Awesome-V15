@@ -97,3 +97,32 @@
 GNU/General Public License (see [license.txt](https://github.com/yrestom/POS-Awesome/blob/master/license.txt))
 
 The POS Awesome code is licensed as GNU General Public License (v3)
+
+## Deployment Notes
+
+When deploying POS Awesome to production, if you encounter 404 errors for JavaScript or CSS files, follow these steps:
+
+1. Ensure the app is correctly installed:
+   ```
+   bench --site your_site_name list-apps
+   ```
+
+2. Rebuild the frontend assets with non-hashed filenames:
+   ```
+   npm run build
+   ```
+
+3. Clear the cache and rebuild:
+   ```
+   bench --site your_site_name clear-cache
+   bench --site your_site_name build
+   ```
+
+4. If issues persist, check that the JS/CSS files are correctly referenced in hooks.py and properly copied to your site's public directory.
+
+5. You may need to manually copy the dist files:
+   ```
+   cp -r posawesome/public/dist/* /path/to/frappe/sites/your_site_name/public/posawesome/dist/
+   ```
+
+Remember that after updating your code, you need to rebuild the frontend and clear the cache.
