@@ -1,7 +1,7 @@
 {
   "scripts": {
     "dev": "vite",
-    "build": "node esbuild.config.js"
+    "build": "node esbuild.config.js || node simple-build.js"
   },
   "dependencies": {
     "esbuild": "^0.25.4",

@@ -1,6 +1,27 @@
 const fs = require('fs');
 const path = require('path');
 
+// Try different possible paths for esbuild in Frappe environment
+function getEsbuild() {
+  try {
+    // First try local esbuild
+    return require('esbuild');
+  } catch (e) {
+    try {
+      // Try Frappe's esbuild
+      return require('../frappe/node_modules/esbuild');
+    } catch (e) {
+      try {
+        // Try bench's esbuild
+        return require('../../node_modules/esbuild');
+      } catch (e) {
+        console.error('Could not find esbuild module. Please install it using: npm install esbuild --save');
+        process.exit(1);
+      }
+    }
+  }
+}
+
 // Simple Vue loader for esbuild
 // This is a very basic implementation that extracts the script part of Vue files
 // For a full-featured Vue loader, you would use esbuild plugins
@@ -32,7 +53,7 @@ const vuePlugin = {
 // Main build function
 async function build() {
   try {
-    const esbuild = require('esbuild');
+    const esbuild = getEsbuild();
     
     await esbuild.build({
       entryPoints: ['posawesome/public/js/posapp/posapp.js'],
