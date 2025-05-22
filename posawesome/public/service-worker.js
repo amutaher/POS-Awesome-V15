@@ -1,7 +1,26 @@
-const CACHE_NAME = 'pos-awesome-cache-v3';
+/**
+ * POS Awesome Service Worker
+ * Enhanced with Workbox for better caching and offline support
+ */
 
-// List of assets to cache for offline functionality
-const ASSETS_TO_CACHE = [
+importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
+
+// Import Workbox modules
+const { precacheAndRoute, cleanupOutdatedCaches } = workbox.precaching;
+const { registerRoute } = workbox.routing;
+const { StaleWhileRevalidate, CacheFirst, NetworkFirst, NetworkOnly } = workbox.strategies;
+const { ExpirationPlugin } = workbox.expiration;
+const { CacheableResponsePlugin } = workbox.cacheable.response;
+const { BackgroundSyncPlugin } = workbox.backgroundSync;
+
+// Clean up any outdated caches from previous versions
+cleanupOutdatedCaches();
+
+// Precache all build assets (automatically generated at build time)
+precacheAndRoute(self.__WB_MANIFEST || []);
+
+// Add additional assets to precache for offline functionality
+const additionalAssetsToPrecache = [
   '/app/posapp',
   '/assets/posawesome/js/posapp/posapp.js',
   '/assets/posawesome/js/posapp/Home.vue',
@@ -26,158 +45,138 @@ const ASSETS_TO_CACHE = [
   '/assets/posawesome/js/posapp/components/offline/SyncStatus.vue'
 ];
 
-// API endpoints to cache for offline use
-const API_ROUTES_TO_CACHE = [
-  '/api/method/posawesome.posawesome.api.posapp.get_items',
-  '/api/method/posawesome.posawesome.api.posapp.get_customers',
-  '/api/method/posawesome.posawesome.api.posapp.get_pos_profile',
-  '/api/method/posawesome.posawesome.api.posapp.get_customer_details',
-  '/api/method/posawesome.posawesome.api.posapp.get_offers',
-  '/api/method/posawesome.posawesome.api.posapp.get_item_details',
-  '/api/method/posawesome.posawesome.api.posapp.get_item_group_suggestion',
-  '/api/method/posawesome.posawesome.api.posapp.get_items_details',
-  '/api/method/posawesome.posawesome.api.posapp.get_items_groups',
-  '/api/method/posawesome.posawesome.api.posapp.get_delivery_charges',
-  '/api/method/posawesome.posawesome.api.posapp.get_customer_addresses',
-  '/api/method/posawesome.posawesome.api.posapp.get_customer_info',
-  '/api/method/posawesome.posawesome.api.posapp.get_items_from_barcode',
-  '/api/method/posawesome.posawesome.api.posapp.get_customer_groups',
-  '/api/method/posawesome.posawesome.api.posapp.get_customer_names',
-  '/api/method/posawesome.posawesome.api.posapp.get_draft_invoices',
-  '/api/method/posawesome.posawesome.api.posapp.get_available_credit',
-  '/api/method/posawesome.posawesome.api.posapp.check_opening_shift'
-];
+precacheAndRoute(
+  additionalAssetsToPrecache.map(url => ({
+    url,
+    revision: null, // Let the browser handle the versioning
+  }))
+);
 
-// Install event - caches assets for offline use
-self.addEventListener('install', (event) => {
-  console.log('[Service Worker] Install');
-  
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('[Service Worker] Caching app shell and assets');
-        return cache.addAll(ASSETS_TO_CACHE);
-      })
-      .then(() => self.skipWaiting())
-  );
-});
-
-// Activate event - cleans up old caches
-self.addEventListener('activate', (event) => {
-  console.log('[Service Worker] Activate');
-  
-  event.waitUntil(
-    caches.keys().then((keyList) => {
-      return Promise.all(keyList.map((key) => {
-        if (key !== CACHE_NAME) {
-          console.log('[Service Worker] Removing old cache', key);
-          return caches.delete(key);
+// Create background sync plugin for invoice queue with exponential backoff
+const bgSyncPlugin = new BackgroundSyncPlugin('invoiceQueue', {
+  maxRetentionTime: 24 * 60, // Retry for up to 24 hours (in minutes)
+  onSync: async ({ queue }) => {
+    let entry;
+    while ((entry = await queue.shiftRequest())) {
+      try {
+        const response = await fetch(entry.request.clone());
+        
+        if (!response.ok) {
+          // If server returns an error, put the request back in the queue
+          // but only if it's not a conflict (409) response
+          if (response.status !== 409) {
+            throw new Error('Server error: ' + response.status);
+          } else {
+            // Handle conflict by notifying the client
+            self.clients.matchAll().then(clients => {
+              clients.forEach(client => {
+                client.postMessage({
+                  type: 'SYNC_CONFLICT',
+                  requestData: {
+                    url: entry.request.url,
+                    timestamp: new Date().toISOString(),
+                    headers: Object.fromEntries(entry.request.headers.entries())
+                  }
+                });
+              });
+            });
+          }
         }
-      }));
-    })
-    .then(() => self.clients.claim())
-  );
-});
-
-// Network-first strategy for API calls with fallback to cache
-async function networkFirstWithCacheFallback(request) {
-  try {
-    // Try network first
-    const networkResponse = await fetch(request.clone());
-    
-    // If successful, clone and cache the response
-    if (networkResponse && networkResponse.status === 200) {
-      const responseToCache = networkResponse.clone();
-      const cache = await caches.open(CACHE_NAME);
-      await cache.put(request, responseToCache);
+      } catch (error) {
+        await queue.unshiftRequest(entry);
+        throw error; // Let workbox handle the retry
+      }
     }
     
-    return networkResponse;
-  } catch (error) {
-    // If network fails, try to get from cache
-    const cachedResponse = await caches.match(request);
-    if (cachedResponse) {
-      console.log('[Service Worker] Serving from cache:', request.url);
-      return cachedResponse;
-    }
-    
-    // If nothing in cache for API requests, return a JSON error response
-    if (request.url.includes('/api/')) {
-      console.log('[Service Worker] No cached response for API call:', request.url);
-      return new Response(JSON.stringify({ 
-        error: true, 
-        message: 'You are offline. This data is not available offline.',
-        offline: true
-      }), {
-        headers: { 'Content-Type': 'application/json' }
+    // Notify clients that sync is complete
+    self.clients.matchAll().then(clients => {
+      clients.forEach(client => {
+        client.postMessage({
+          type: 'SYNC_COMPLETE_NOTIFICATION',
+          message: 'All offline invoices have been synchronized'
+        });
       });
-    }
-    
-    // For other resources, return a generic error
-    return new Response('Network error happened', {
-      status: 408,
-      headers: { 'Content-Type': 'text/plain' }
     });
   }
-}
+});
+
+// Register route for API requests with stale-while-revalidate strategy
+registerRoute(
+  ({ url }) => url.pathname.startsWith('/api/'),
+  new StaleWhileRevalidate({
+    cacheName: 'api-cache',
+    plugins: [
+      new CacheableResponsePlugin({ statuses: [0, 200] }),
+      new ExpirationPlugin({ maxEntries: 100, maxAgeSeconds: 12 * 3600 })
+    ]
+  })
+);
+
+// Special handling for invoice submission - use background sync
+registerRoute(
+  /\/api\/method\/posawesome\.posawesome\.api\.posapp\.submit_invoice/,
+  new NetworkOnly({
+    plugins: [bgSyncPlugin]
+  }),
+  'POST'
+);
 
 // Cache-first strategy for static assets
-async function cacheFirstWithNetworkFallback(request) {
-  const cachedResponse = await caches.match(request);
-  if (cachedResponse) {
-    return cachedResponse;
-  }
-  
-  // No match in cache, go to network
-  try {
-    const networkResponse = await fetch(request);
-    
-    // Check if we received a valid response
-    if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
-      return networkResponse;
-    }
-    
-    // Clone the response for the cache and to return
-    const responseToCache = networkResponse.clone();
-    
-    // Don't cache socket.io connections
-    if (!request.url.includes('socket.io')) {
-      const cache = await caches.open(CACHE_NAME);
-      await cache.put(request, responseToCache);
-    }
-    
-    return networkResponse;
-  } catch (error) {
-    // If fetch fails (offline) and it's a navigation request, try to return the offline page
-    if (request.mode === 'navigate') {
-      return caches.match('/app/posapp');
-    }
-    
-    throw error; // No fallback available
-  }
-}
+registerRoute(
+  /\.(?:js|css|png|jpg|jpeg|svg|gif|woff2|woff|ttf)$/,
+  new CacheFirst({
+    cacheName: 'static-assets',
+    plugins: [
+      new ExpirationPlugin({
+        maxEntries: 60,
+        maxAgeSeconds: 30 * 24 * 60 * 60, // 30 days
+      }),
+    ],
+  })
+);
 
-// Fetch event - serves from cache if available, otherwise fetches from network
-self.addEventListener('fetch', (event) => {
-  // Skip cross-origin requests except for CDN resources
-  if (!event.request.url.startsWith(self.location.origin) && 
-      !event.request.url.startsWith('https://cdn.jsdelivr.net') && 
-      !event.request.url.startsWith('https://fonts.googleapis.com')) {
-    return;
+// Network-first strategy for HTML documents
+registerRoute(
+  /\.(?:html)$/,
+  new NetworkFirst({
+    cacheName: 'html-cache',
+    plugins: [
+      new ExpirationPlugin({
+        maxEntries: 10,
+        maxAgeSeconds: 24 * 60 * 60, // 1 day
+      }),
+    ],
+  })
+);
+
+// Listen for messages from clients
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SYNC_COMPLETED') {
+    console.log('[Service Worker] Sync completed successfully');
+    // Notify all clients that sync is complete
+    self.clients.matchAll().then(clients => {
+      clients.forEach(client => {
+        client.postMessage({
+          type: 'SYNC_COMPLETE_NOTIFICATION',
+          message: 'All offline invoices have been synchronized'
+        });
+      });
+    });
   }
   
-  // Special handling for API routes we want to cache
-  const isApiRouteToCache = API_ROUTES_TO_CACHE.some(route => 
-    event.request.url.includes(route)
-  );
-  
-  if (isApiRouteToCache) {
-    event.respondWith(networkFirstWithCacheFallback(event.request));
-    return;
+  if (event.data && event.data.type === 'CACHE_DYNAMIC_URLS') {
+    const urls = event.data.urls;
+    if (urls && urls.length) {
+      caches.open('api-cache')
+        .then(cache => {
+          console.log('[Service Worker] Caching dynamic URLs:', urls);
+          return cache.addAll(urls);
+        })
+        .catch(error => {
+          console.error('[Service Worker] Failed to cache dynamic URLs:', error);
+        });
+    }
   }
-  
-  // Cache-first strategy for static assets
-  event.respondWith(cacheFirstWithNetworkFallback(event.request));
 });
 
 // Sync event for background syncing when connection is restored
@@ -216,34 +215,4 @@ async function syncPendingInvoices() {
     console.error('[Service Worker] Sync failed:', error);
     return false;
   }
-}
-
-// Listen for messages from clients
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SYNC_COMPLETED') {
-    console.log('[Service Worker] Sync completed successfully');
-    // Notify all clients that sync is complete
-    self.clients.matchAll().then(clients => {
-      clients.forEach(client => {
-        client.postMessage({
-          type: 'SYNC_COMPLETE_NOTIFICATION',
-          message: 'All offline invoices have been synchronized'
-        });
-      });
-    });
-  }
-  
-  if (event.data && event.data.type === 'CACHE_DYNAMIC_URLS') {
-    const urls = event.data.urls;
-    if (urls && urls.length) {
-      caches.open(CACHE_NAME)
-        .then(cache => {
-          console.log('[Service Worker] Caching dynamic URLs:', urls);
-          return cache.addAll(urls);
-        })
-        .catch(error => {
-          console.error('[Service Worker] Failed to cache dynamic URLs:', error);
-        });
-    }
-  }
-}); 
+} 

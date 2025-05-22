@@ -1,201 +1,152 @@
 <template>
-  <div class="sync-status-container">
-    <v-snackbar
-      v-model="showSyncStarted"
-      :timeout="3000"
-      color="info"
-    >
-      <div class="d-flex align-center">
-        <v-progress-circular
-          indeterminate
-          size="20"
-          width="2"
-          color="white"
-          class="mr-2"
-        ></v-progress-circular>
-        <span>{{ $t('Synchronizing offline data...') }}</span>
+  <div class="sync-status">
+    <div class="sync-status-content">
+      <div class="sync-status-icon">
+        <svg v-if="syncing" class="spinning" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 0 1-9 9"></path>
+          <path d="M12 3a9 9 0 0 1 9 9"></path>
+          <path d="M9 21a9 9 0 0 1-9-9"></path>
+          <path d="M3 12a9 9 0 0 1 9-9"></path>
+        </svg>
+        <svg v-else-if="conflicts > 0" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+          <line x1="12" y1="9" x2="12" y2="13"></line>
+          <line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+        <svg v-else xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
       </div>
-    </v-snackbar>
-
-    <v-snackbar
-      v-model="showSyncCompleted"
-      :timeout="5000"
-      color="success"
-    >
-      <div class="d-flex align-center">
-        <v-icon class="mr-2">mdi-check-circle</v-icon>
-        <span>{{ syncCompletedMessage }}</span>
+      <div class="sync-status-message">
+        <span v-if="syncing">Syncing {{ pendingCount }} invoice(s)...</span>
+        <span v-else-if="conflicts > 0">{{ conflicts }} invoice(s) need attention</span>
+        <span v-else>{{ pendingCount }} invoice(s) pending sync</span>
       </div>
-      <template v-slot:actions>
-        <v-btn
-          variant="text"
-          @click="showSyncCompleted = false"
+      <div class="sync-status-actions">
+        <button 
+          v-if="!syncing" 
+          class="sync-button" 
+          @click="retrySync"
         >
-          {{ $t('Close') }}
-        </v-btn>
-      </template>
-    </v-snackbar>
-
-    <v-dialog
-      v-model="showFailedInvoicesDialog"
-      max-width="500px"
-    >
-      <v-card>
-        <v-card-title class="text-h6">
-          {{ $t('Failed Invoices') }}
-        </v-card-title>
-        <v-card-text>
-          <p>{{ $t('The following invoices could not be synchronized:') }}</p>
-          <v-list>
-            <v-list-item
-              v-for="(invoice, index) in failedInvoices"
-              :key="index"
-            >
-              <v-list-item-title>
-                {{ $t('Invoice') }} #{{ index + 1 }}
-                <v-chip
-                  size="small"
-                  color="error"
-                  class="ml-2"
-                >
-                  {{ $t('Error') }}
-                </v-chip>
-              </v-list-item-title>
-              <v-list-item-subtitle>
-                {{ invoice.error || $t('Unknown error') }}
-              </v-list-item-subtitle>
-            </v-list-item>
-          </v-list>
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer></v-spacer>
-          <v-btn
-            color="primary"
-            @click="showFailedInvoicesDialog = false"
-          >
-            {{ $t('Close') }}
-          </v-btn>
-          <v-btn
-            color="warning"
-            @click="retryFailedInvoices"
-          >
-            {{ $t('Retry All') }}
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
+          Sync Now
+        </button>
+        <button 
+          class="dismiss-button"
+          @click="dismiss"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
 <script>
 export default {
   name: 'SyncStatus',
-  
-  data() {
-    return {
-      showSyncStarted: false,
-      showSyncCompleted: false,
-      showFailedInvoicesDialog: false,
-      syncCompletedMessage: '',
-      failedInvoices: []
-    };
-  },
-  
-  mounted() {
-    // Listen for service worker messages
-    if (navigator.serviceWorker) {
-      navigator.serviceWorker.addEventListener('message', this.handleServiceWorkerMessage);
+  props: {
+    pendingCount: {
+      type: Number,
+      default: 0
+    },
+    syncing: {
+      type: Boolean,
+      default: false
+    },
+    conflicts: {
+      type: Number,
+      default: 0
     }
-    
-    // Listen for sync complete event
-    window.addEventListener('pos-awesome-sync-complete', this.handleSyncComplete);
   },
-  
-  beforeUnmount() {
-    // Clean up
-    if (navigator.serviceWorker) {
-      navigator.serviceWorker.removeEventListener('message', this.handleServiceWorkerMessage);
-    }
-    
-    window.removeEventListener('pos-awesome-sync-complete', this.handleSyncComplete);
-  },
-  
   methods: {
-    handleServiceWorkerMessage(event) {
-      if (event.data) {
-        if (event.data.type === 'SYNC_STARTED') {
-          this.showSyncStarted = true;
-        } else if (event.data.type === 'SYNC_COMPLETE_NOTIFICATION') {
-          this.syncCompletedMessage = event.data.message || this.$t('All offline data has been synchronized');
-          this.showSyncStarted = false;
-          this.showSyncCompleted = true;
-          
-          // Check for failed invoices
-          this.checkFailedInvoices();
-        }
-      }
+    retrySync() {
+      this.$emit('retry-sync');
     },
-    
-    handleSyncComplete() {
-      this.showSyncStarted = false;
-      this.syncCompletedMessage = this.$t('All offline data has been synchronized');
-      this.showSyncCompleted = true;
-      
-      // Check for failed invoices
-      this.checkFailedInvoices();
-    },
-    
-    async checkFailedInvoices() {
-      if (!window.offlineStorage || !window.offlineStorage.db) {
-        console.log('[SyncStatus] Offline storage not initialized');
-        return;
-      }
-      
-      try {
-        // Get failed invoices
-        const failedInvoices = await window.offlineStorage.getDataByIndex('pendingInvoices', 'status', 'failed');
-        
-        if (failedInvoices && failedInvoices.length > 0) {
-          this.failedInvoices = failedInvoices;
-          this.showFailedInvoicesDialog = true;
-        }
-      } catch (error) {
-        console.error('[SyncStatus] Error checking failed invoices:', error);
-      }
-    },
-    
-    async retryFailedInvoices() {
-      if (!window.offlineStorage || !window.offlineStorage.db) {
-        console.log('[SyncStatus] Offline storage not initialized');
-        return;
-      }
-      
-      try {
-        // Reset status to pending for all failed invoices
-        for (const invoice of this.failedInvoices) {
-          invoice.status = 'pending';
-          invoice.sync_attempts = 0;
-          await window.offlineStorage.saveData('pendingInvoices', invoice);
-        }
-        
-        // Close dialog
-        this.showFailedInvoicesDialog = false;
-        
-        // Trigger sync
-        window.offlineStorage.triggerSync();
-        
-        // Show sync started
-        this.showSyncStarted = true;
-      } catch (error) {
-        console.error('[SyncStatus] Error retrying failed invoices:', error);
-      }
+    dismiss() {
+      this.$emit('dismiss');
     }
   }
-};
+}
 </script>
 
-<style scoped>
-.sync-status-container {
-  /* Component styles here if needed */
+<style>
+.sync-status {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background-color: #ffffff;
+  border: 1px solid #e1e1e1;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 10000;
+  width: 300px;
+  overflow: hidden;
+}
+
+.sync-status-content {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+}
+
+.sync-status-icon {
+  margin-right: 12px;
+  display: flex;
+  align-items: center;
+  color: #4F46E5;
+}
+
+.sync-status-message {
+  flex: 1;
+  font-size: 14px;
+  color: #333;
+}
+
+.sync-status-actions {
+  display: flex;
+  align-items: center;
+  margin-left: 8px;
+}
+
+.sync-button {
+  background-color: #4F46E5;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-right: 8px;
+}
+
+.dismiss-button {
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.spinning {
+  animation: spin 1.5s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@media (max-width: 600px) {
+  .sync-status {
+    width: calc(100% - 40px);
+    bottom: 10px;
+    right: 20px;
+  }
 }
 </style> 

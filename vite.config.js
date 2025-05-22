@@ -1,4 +1,3 @@
-// Build PWA Configuration for POS Awesome
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -8,6 +7,7 @@ export default defineConfig({
     vue(),
     VitePWA({
       registerType: 'autoUpdate',
+      injectRegister: 'auto',
       includeAssets: ['fonts/*.ttf', 'images/*.{png,jpg}', 'icons/*.{png,svg}'],
       manifest: {
         name: 'POS Awesome',
@@ -16,6 +16,8 @@ export default defineConfig({
         theme_color: '#4F46E5',
         background_color: '#ffffff',
         display: 'standalone',
+        orientation: 'portrait',
+        categories: ['business', 'finance', 'productivity'],
         icons: [
           {
             src: 'icons/icon-72x72.png',
@@ -35,11 +37,13 @@ export default defineConfig({
           {
             src: 'icons/icon-512x512.png',
             sizes: '512x512',
-            type: 'image/png'
+            type: 'image/png',
+            purpose: 'any maskable'
           }
         ]
       },
       workbox: {
+        cleanupOutdatedCaches: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,jpeg,ttf,woff,woff2}'],
         runtimeCaching: [
           {
@@ -55,6 +59,19 @@ export default defineConfig({
                 statuses: [0, 200]
               }
             }
+          },
+          {
+            urlPattern: /\/api\/method\/posawesome\.posawesome\.api\.posapp\.submit_invoice/,
+            handler: 'NetworkOnly',
+            options: {
+              backgroundSync: {
+                name: 'invoiceQueue',
+                options: {
+                  maxRetentionTime: 24 * 60 // retry for up to 24 hours (in minutes)
+                }
+              }
+            },
+            method: 'POST'
           },
           {
             urlPattern: /\.(?:png|jpg|jpeg|svg|gif)$/,
@@ -93,5 +110,9 @@ export default defineConfig({
         }
       }
     }
+  },
+  server: {
+    port: 3000,
+    open: true
   }
-});
+}); 
