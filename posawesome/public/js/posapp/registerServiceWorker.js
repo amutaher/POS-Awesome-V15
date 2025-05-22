@@ -8,22 +8,50 @@ export async function registerServiceWorker() {
       const isProduction = window.location.hostname !== 'localhost' && 
                           window.location.hostname !== '127.0.0.1';
       
+      // Get the app base URL (needed to correctly reference the service worker)
+      const baseUrl = window.frappe ? window.frappe.urllib.get_base_url() : '';
+      
+      // Define possible service worker paths to try
+      const possiblePaths = [
+        '/service-worker.js',
+        '/posawesome/public/service-worker.js',
+        '/assets/posawesome/public/service-worker.js',
+        '/sw.js' // Original path as fallback
+      ];
+      
       // Only try to register service worker in production environment
       if (isProduction) {
-        // First check if the service worker file exists to avoid 404 errors
-        try {
-          const swResponse = await fetch('/sw.js');
-          if (!swResponse.ok) {
-            console.warn('Service worker file not found. Skipping registration.');
-            return null;
+        let serviceWorkerUrl = null;
+        
+        // Try to find the service worker file by testing each path
+        for (const path of possiblePaths) {
+          try {
+            console.log(`Checking for service worker at: ${baseUrl}${path}`);
+            const swResponse = await fetch(`${baseUrl}${path}`, {
+              method: 'HEAD', // Use HEAD request to be efficient
+              cache: 'no-cache' // Avoid cached responses
+            });
+            
+            if (swResponse.ok) {
+              console.log(`Found service worker at: ${baseUrl}${path}`);
+              serviceWorkerUrl = `${baseUrl}${path}`;
+              break;
+            }
+          } catch (err) {
+            console.log(`Service worker not found at: ${baseUrl}${path}`);
+            // Continue trying other paths
           }
-        } catch (error) {
-          console.warn('Service worker file not accessible. Skipping registration:', error);
+        }
+        
+        // If no service worker found, log and return
+        if (!serviceWorkerUrl) {
+          console.warn('No service worker found at any of the expected locations. Skipping registration.');
           return null;
         }
         
         // If file exists, proceed with registration
-        const registration = await navigator.serviceWorker.register('/sw.js', {
+        console.log(`Registering service worker from: ${serviceWorkerUrl}`);
+        const registration = await navigator.serviceWorker.register(serviceWorkerUrl, {
           scope: '/'
         });
         
@@ -49,6 +77,7 @@ export async function registerServiceWorker() {
       }
     } catch (error) {
       console.error('Service worker registration failed:', error);
+      // Don't let service worker failures block the app from working
       return null;
     }
   } else {
