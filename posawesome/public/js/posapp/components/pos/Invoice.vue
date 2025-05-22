@@ -4217,8 +4217,25 @@ export default {
       
       // Check if offline data is available
       if (this.offlineStorage) {
-        this.offlineDataStatus = await this.offlineStorage.checkOfflineDataAvailability();
-        console.log('Offline data status:', this.offlineDataStatus);
+        try {
+          this.offlineDataStatus = await this.offlineStorage.checkOfflineDataAvailability();
+          console.log('Offline data status:', this.offlineDataStatus);
+          
+          // Add isReady flag to simplify checking
+          if (this.offlineDataStatus) {
+            this.offlineDataStatus.isReady = this.offlineDataStatus.posProfileAvailable && 
+                                          (this.offlineDataStatus.itemsAvailable || this.items.length > 0);
+          }
+        } catch (error) {
+          console.error('Error checking offline data availability:', error);
+          this.offlineDataStatus = {
+            itemsAvailable: false,
+            customersAvailable: false,
+            posProfileAvailable: false,
+            offlineReady: false,
+            isReady: false
+          };
+        }
       }
     },
     

@@ -555,26 +555,60 @@ export default {
     scan_barcoud() {
       const vm = this;
       try {
-        // Check if scanner is already attached to document
-        if (document._scannerAttached) {
-          return;
+        // Check if onScan is defined
+        if (typeof onScan === 'undefined') {
+          // Dynamically load the onScan.js script if not already defined
+          if (!document.getElementById('onscan-script')) {
+            console.log('Loading onScan.js dynamically');
+            const script = document.createElement('script');
+            script.id = 'onscan-script';
+            script.src = '/posawesome/posawesome/page/posapp/onscan.js';
+            script.onload = function() {
+              console.log('onScan.js loaded successfully');
+              vm.initScanner();
+            };
+            script.onerror = function() {
+              console.error('Failed to load onScan.js');
+            };
+            document.head.appendChild(script);
+            return;
+          } else {
+            console.error('onScan.js script tag exists but onScan is undefined');
+            return;
+          }
         }
         
+        // Initialize scanner if onScan is available
+        this.initScanner();
+      } catch (error) {
+        console.warn('Scanner initialization error:', error.message);
+      }
+    },
+    
+    // Separate function to initialize the scanner
+    initScanner() {
+      // Check if scanner is already attached to document
+      if (document._scannerAttached) {
+        return;
+      }
+      
+      try {
         onScan.attachTo(document, {
           suffixKeyCodes: [],
           keyCodeMapper: function (oEvent) {
             oEvent.stopImmediatePropagation();
             return onScan.decodeKeyEvent(oEvent);
           },
-          onScan: function (sCode) {
+          onScan: (sCode) => {
             setTimeout(() => {
-              vm.trigger_onscan(sCode);
+              this.trigger_onscan(sCode);
             }, 300);
           },
         });
         
         // Mark document as having scanner attached
         document._scannerAttached = true;
+        console.log('Barcode scanner initialized successfully');
       } catch (error) {
         console.warn('Scanner initialization error:', error.message);
       }

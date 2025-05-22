@@ -319,6 +319,19 @@ export default {
     }
   },
   async mounted() {
+    const vm = this;
+    
+    // Fix for shortcut.js errors - capture global errors
+    window.addEventListener('error', function(event) {
+      // Check if error is from shortcut.js
+      if (event.filename && event.filename.includes('shortcut.js')) {
+        console.warn('Prevented shortcut.js error:', event.message);
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      }
+    }, true);
+    
     this.remove_frappe_nav();
     this.checkNetworkStatus();
     this.setupPWAInstall();
