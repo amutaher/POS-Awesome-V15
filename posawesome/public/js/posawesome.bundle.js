@@ -1,3 +1,20 @@
+// External dependencies via CDN
+if (typeof uuid === 'undefined') {
+  const uuidScript = document.createElement('script');
+  uuidScript.src = 'https://cdn.jsdelivr.net/npm/uuid@9.0.1/dist/index.min.js';
+  document.head.appendChild(uuidScript);
+  console.log('UUID library loaded via CDN');
+}
+
+if (typeof idb === 'undefined') {
+  const idbScript = document.createElement('script');
+  idbScript.src = 'https://cdn.jsdelivr.net/npm/idb@7.1.1/build/index.min.js';
+  document.head.appendChild(idbScript);
+  console.log('IDB library loaded via CDN');
+}
+
+// POS Awesome bundle
+frappe.provide('frappe.PosApp');
 import './toConsole';
 import './posapp/posapp';
 
