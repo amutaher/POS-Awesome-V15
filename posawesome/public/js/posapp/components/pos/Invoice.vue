@@ -4312,145 +4312,62 @@ export default {
   },
 
   mounted() {
-    // Register event listeners for POS profile, items, customer, offers, etc.
-    this.eventBus.on("register_pos_profile", (data) => {
-      this.pos_profile = data.pos_profile;
-      this.customer = data.pos_profile.customer;
-      this.pos_opening_shift = data.pos_opening_shift;
-      this.stock_settings = data.stock_settings;
-      // Increase precision for better handling of small amounts
-      this.float_precision = 6;  // Changed from 2 to 6
-      this.currency_precision = 6;  // Changed from 2 to 6
-      this.invoiceType = this.pos_profile.posa_default_sales_order
-        ? "Order"
-        : "Invoice";
-
-      // Add this block to handle currency initialization
-      if (this.pos_profile.posa_allow_multi_currency) {
-        this.fetch_available_currencies().then(() => {
-          // Set default currency after currencies are loaded
-          this.selected_currency = this.pos_profile.currency;
-          this.exchange_rate = 1;
-        }).catch(error => {
-          console.error("Error initializing currencies:", error);
-          this.eventBus.emit("show_message", {
-            title: __("Error loading currencies"),
-            color: "error"
-          });
-        });
-      }
-    });
-    this.eventBus.on("add_item", (item) => {
-      this.add_item(item);
-    });
-    this.eventBus.on("update_customer", (customer) => {
-      this.customer = customer;
-    });
-    this.eventBus.on("fetch_customer_details", () => {
-      this.fetch_customer_details();
-    });
-    this.eventBus.on("clear_invoice", () => {
-      this.clear_invoice();
-    });
-    this.eventBus.on("load_invoice", (data) => {
-      this.load_invoice(data);
-    });
-    this.eventBus.on("load_order", (data) => {
-      this.new_order(data);
-      // this.eventBus.emit("set_pos_coupons", data.posa_coupons);
-    });
-    this.eventBus.on("set_offers", (data) => {
-      this.posOffers = data;
-    });
-    this.eventBus.on("update_invoice_offers", (data) => {
-      this.updateInvoiceOffers(data);
-    });
-    this.eventBus.on("update_invoice_coupons", (data) => {
-      this.posa_coupons = data;
-      this.handelOffers();
-    });
-    this.eventBus.on("set_all_items", (data) => {
-      this.allItems = data;
-      this.items.forEach((item) => {
-        this.update_item_detail(item);
+    this.$nextTick(function () {
+      this.get_pos_profile();
+      this.offline_data_status();
+      this.calculate_discounts();
+      this.eventBus.on('register_pos_profile', (data) => {
+        this.pos_profile = data.pos_profile;
+        this.pos_opening_shift = data.pos_opening_shift;
+        this.customer = this.pos_profile.customer;
+        this.offline_data_status();
       });
-    });
-    this.eventBus.on("load_return_invoice", (data) => {
-      // Handle loading of return invoice and set all related fields
-      console.log("Invoice component received load_return_invoice event with data:", data);
-      this.load_invoice(data.invoice_doc);
-      // Explicitly mark as return invoice
-      this.invoiceType = "Return";
-      this.invoiceTypes = ["Return"];
-      this.invoice_doc.is_return = 1;
-      // Ensure negative values for returns
-      if (this.items && this.items.length) {
-        this.items.forEach(item => {
-          // Ensure item quantities are negative
-          if (item.qty > 0) item.qty = -Math.abs(item.qty);
-          if (item.stock_qty > 0) item.stock_qty = -Math.abs(item.stock_qty);
-        });
-      }
-      if (data.return_doc) {
-        console.log("Return against existing invoice:", data.return_doc.name);
-        // Ensure negative discount amounts
-        this.discount_amount = data.return_doc.discount_amount > 0 ? 
-          -Math.abs(data.return_doc.discount_amount) : 
-          data.return_doc.discount_amount;
-        this.additional_discount_percentage = data.return_doc.additional_discount_percentage > 0 ?
-          -Math.abs(data.return_doc.additional_discount_percentage) :
-          data.return_doc.additional_discount_percentage;
-        this.return_doc = data.return_doc;
-        // Set return_against reference
-        this.invoice_doc.return_against = data.return_doc.name;
-      } else {
-        console.log("Return without invoice reference");
-        // For return without invoice, reset discount values
-        this.discount_amount = 0;
-        this.additional_discount_percentage = 0;
-      }
-      console.log("Invoice state after loading return:", {
-        invoiceType: this.invoiceType,
-        is_return: this.invoice_doc.is_return,
-        items: this.items.length,
-        customer: this.customer
+      this.eventBus.on('show_message', (data) => {
+        this.eventBus.emit('show_message', data);
       });
+      this.eventBus.on('add_item', (item) => {
+        const indx = this.items.findIndex((x) => x.item_code === item.item_code);
+        if (indx !== -1) {
+          this.items[indx].qty = this.items[indx].qty += 1;
+          this.expand_item(this.items[indx]);
+        } else {
+          this.add_item(item);
+        }
+      });
+      this.eventBus.on('set_customer', (customer) => {
+        this.customer = customer;
+      });
+      this.eventBus.on('clear_invoice', () => {
+        this.clear_invoice();
+      });
+      this.eventBus.on('set_offers', (offers) => {
+        this.posOffers = offers;
+      });
+      this.eventBus.on('set_pos_coupons', (coupons) => {
+        this.posa_coupons = coupons;
+      });
+      this.eventBus.on('load_invoice', (invoice) => {
+        this.load_invoice(invoice);
+      });
+      this.eventBus.on('load_order', (order) => {
+        this.load_order(order);
+      });
+      this.eventBus.on('submit_return', (invoice_name) => {
+        this.make_sales_return(invoice_name);
+      });
+      this.eventBus.on('reset_posting_date', () => {
+        this.posting_date = frappe.datetime.nowdate();
+        this.formatted_posting_date = frappe.format(this.posting_date, {
+          fieldtype: 'Date',
+        });
+      });
+      this.eventBus.on('new_invoice', () => {
+        this.new_order();
+      });
+      window.addEventListener('keydown', this.shortPay);
     });
-    this.eventBus.on("set_new_line", (data) => {
-      this.new_line = data;
-    });
-    if (this.pos_profile.posa_allow_multi_currency) {
-      this.fetch_available_currencies();
-    }
-    // Listen for reset_posting_date to reset posting date after invoice submission
-    this.eventBus.on("reset_posting_date", () => {
-      this.posting_date = frappe.datetime.nowdate();
-    });
-    
-    // Initialize offline detection
-    this.initOfflineDetection();
-    
-    // Initialize offline storage reference
-    this.initOfflineStorage();
   },
-  // Cleanup event listeners before component is destroyed
-  beforeUnmount() {
-    // Existing cleanup
-    this.eventBus.off("register_pos_profile");
-    this.eventBus.off("add_item");
-    this.eventBus.off("update_customer");
-    this.eventBus.off("fetch_customer_details");
-    this.eventBus.off("clear_invoice");
-    // Cleanup reset_posting_date listener
-    this.eventBus.off("reset_posting_date");
-    
-    // Clean up any additional resources if needed
-    
-    // Clean up network status subscription
-    if (this.unsubscribeNetwork) {
-      this.unsubscribeNetwork();
-    }
-  },
+  beforeUnmount() {    // Cleanup all event listeners    this.eventBus.off('register_pos_profile');    this.eventBus.off('show_message');    this.eventBus.off('add_item');    this.eventBus.off('set_customer');    this.eventBus.off('update_customer');    this.eventBus.off('fetch_customer_details');    this.eventBus.off('clear_invoice');    this.eventBus.off('set_offers');    this.eventBus.off('set_pos_coupons');    this.eventBus.off('load_invoice');    this.eventBus.off('load_order');    this.eventBus.off('submit_return');    this.eventBus.off('reset_posting_date');    this.eventBus.off('new_invoice');        // Remove event listeners    window.removeEventListener('keydown', this.shortPay);        // Clean up network status subscription    if (this.unsubscribeNetwork) {      this.unsubscribeNetwork();    }  },
   // Register global keyboard shortcuts when component is created
   created() {
     document.addEventListener("keydown", this.shortOpenPayment.bind(this));

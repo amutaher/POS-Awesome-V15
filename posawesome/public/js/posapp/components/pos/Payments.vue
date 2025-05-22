@@ -1055,28 +1055,39 @@ export default {
           vm.sales_person = "";
           vm.addresses = [];
           
-          // Now emit events with proper data
+          // Now emit events in proper sequence with proper data
           try {
-            // First set last invoice reference
-            vm.eventBus.emit("set_last_invoice", invoiceName);
-            
-            // Then show success message
+            // First show success message
             vm.eventBus.emit("show_message", {
-              title: __("Invoice {0} is Submitted", [invoiceName]),
+              title: __("Invoice {0} is Submitted Successfully", [invoiceName]),
               color: "success",
             });
             
-            // Play sound
+            // Play success sound
             frappe.utils.play_sound("submit");
             
-            // Clear invoice data and reset date
+            // Set last invoice reference
+            vm.eventBus.emit("set_last_invoice", invoiceName);
+            
+            // Clear invoice data to prepare for new invoice
             vm.eventBus.emit("clear_invoice");
+            
+            // Reset posting date to today
             vm.eventBus.emit("reset_posting_date");
             
-            // Finally return to invoice view
+            // Finally return to invoice view to create new invoice
             vm.back_to_invoice();
+            
+            // Force event to create a new invoice
+            setTimeout(() => {
+              vm.eventBus.emit("new_invoice");
+            }, 500);
           } catch (error) {
             console.error("Error handling success response", error);
+            vm.eventBus.emit("show_message", {
+              title: __("Error processing success: ") + (error.message || "Unknown error"),
+              color: "warning",
+            });
           }
         }
       });
