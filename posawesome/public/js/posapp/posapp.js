@@ -14,21 +14,17 @@ frappe.PosApp.posapp = class {
         this.$parent = $(document);
         this.page = parent.page;
         this.make_body();
-        this.init_offline_storage();
     }
 
-    async init_offline_storage() {
-        try {
-            window.offlineStorage = new OfflineStorage('posAwesomeDB', 1);
-            await window.offlineStorage.init();
-            console.log('Global OfflineStorage initialized successfully');
-        } catch (error) {
-            console.error('Failed to initialize global OfflineStorage:', error);
-        }
-    }
-
-    make_body() {
+    async make_body() {
         this.$el = this.$parent.find('.main-section');
+        
+        // Initialize offline storage and wait for it to be ready
+        await this.init_offline_storage();
+        
+        // Register service worker and setup sync
+        await this.init_service_worker();
+        
         const vuetify = createVuetify(
             {
                 components,
@@ -61,8 +57,90 @@ frappe.PosApp.posapp = class {
         app.use(vuetify)
         app.mount(this.$el[0]);
     }
-    setup_header() {
 
+    async init_offline_storage() {
+        try {
+            window.offlineStorage = new OfflineStorage('posAwesomeDB', 1);
+            // Wait for the ready promise to resolve
+            await window.offlineStorage.ready;
+            console.log('Global OfflineStorage initialized successfully');
+            
+            // Check data availability
+            const offlineDataStatus = await window.offlineStorage.checkOfflineDataAvailability();
+            console.log('Offline data status:', offlineDataStatus);
+            
+            return window.offlineStorage;
+        } catch (error) {
+            console.error('Failed to initialize global OfflineStorage:', error);
+            throw error;
+        }
+    }
+    
+    async init_service_worker() {
+        if ('serviceWorker' in navigator) {
+            try {
+                const registration = await navigator.serviceWorker.register('/assets/posawesome/service-worker.js');
+                console.log('Service Worker registered with scope:', registration.scope);
+                
+                // Setup cross-browser synchronization fallback
+                registration.ready.then(reg => {
+                    if ('sync' in reg) {
+                        console.log('Background Sync is supported');
+                        // Register for background sync
+                        reg.sync.register('sync-pending-invoices').catch(err => {
+                            console.error('Background Sync registration error:', err);
+                        });
+                    } else {
+                        console.log('Background Sync not supported, using polling fallback');
+                        // Set up polling sync for browsers without Background Sync (e.g. Safari)
+                        this.setupSyncPolling();
+                    }
+                });
+                
+                return registration;
+            } catch (error) {
+                console.error('Service Worker registration failed:', error);
+            }
+        } else {
+            console.log('Service Workers not supported');
+        }
+    }
+    
+    setupSyncPolling() {
+        // Clear any existing interval
+        if (this.syncInterval) {
+            clearInterval(this.syncInterval);
+        }
+        
+        // Set up polling every minute when online
+        this.syncInterval = setInterval(() => {
+            if (navigator.onLine && window.offlineStorage) {
+                window.offlineStorage.processAll().then(result => {
+                    if (result) {
+                        console.log('Polling sync successful');
+                    }
+                }).catch(err => {
+                    console.error('Polling sync error:', err);
+                });
+            }
+        }, 60000); // Check every minute
+        
+        // Also set up event listeners for manual sync
+        window.addEventListener('online', () => {
+            if (window.offlineStorage) {
+                window.offlineStorage.processAll();
+            }
+        });
+        
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (this.syncInterval) {
+                clearInterval(this.syncInterval);
+            }
+        });
     }
 
+    setup_header() {
+        // Header setup code
+    }
 };
