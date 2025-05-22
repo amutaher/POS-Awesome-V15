@@ -1,6 +1,7 @@
 {
   "scripts": {
-    "dev": "vite"
+    "dev": "vite",
+    "build": "node node_modules/esbuild/bin/esbuild posawesome/public/js/posapp/posapp.js --bundle --outfile=posawesome/public/js/posawesome.bundle.js --format=iife --external:idb"
   },
   "dependencies": {
     "lodash": "^4.17.21",
