@@ -1039,23 +1039,45 @@ export default {
             });
             return;
           }
+          
+          // Make sure we handle print before any data reset
           if (print) {
             vm.load_print_page();
           }
+          
+          // Store invoice name for reference
+          const invoiceName = r.message.name;
+          
+          // Reset data in proper order to avoid errors
           vm.customer_credit_dict = [];
           vm.redeem_customer_credit = false;
           vm.is_cashback = true;
           vm.sales_person = "";
-          vm.eventBus.emit("set_last_invoice", vm.invoice_doc.name);
-          vm.eventBus.emit("show_message", {
-            title: __("Invoice {0} is Submitted", [r.message.name]),
-            color: "success",
-          });
-          frappe.utils.play_sound("submit");
           vm.addresses = [];
-          vm.eventBus.emit("clear_invoice");
-          vm.eventBus.emit("reset_posting_date");
-          vm.back_to_invoice();
+          
+          // Now emit events with proper data
+          try {
+            // First set last invoice reference
+            vm.eventBus.emit("set_last_invoice", invoiceName);
+            
+            // Then show success message
+            vm.eventBus.emit("show_message", {
+              title: __("Invoice {0} is Submitted", [invoiceName]),
+              color: "success",
+            });
+            
+            // Play sound
+            frappe.utils.play_sound("submit");
+            
+            // Clear invoice data and reset date
+            vm.eventBus.emit("clear_invoice");
+            vm.eventBus.emit("reset_posting_date");
+            
+            // Finally return to invoice view
+            vm.back_to_invoice();
+          } catch (error) {
+            console.error("Error handling success response", error);
+          }
         }
       });
     },
