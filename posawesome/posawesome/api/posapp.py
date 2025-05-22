@@ -635,6 +635,15 @@ def update_invoice(data):
 
 @frappe.whitelist()
 def submit_invoice(invoice, data):
+    # Check for idempotency key in header
+    idempotency_key = frappe.request.headers.get('Idempotency-Key')
+    if idempotency_key:
+        # Check if we've already processed this request
+        processed_key = frappe.cache().get_value(f"posa_idempotent_{idempotency_key}")
+        if processed_key:
+            # Return the cached result with 200 OK
+            return processed_key
+    
     data = json.loads(data)
     invoice = json.loads(invoice)
     invoice_doc = frappe.get_doc("Sales Invoice", invoice.get("name"))
@@ -758,6 +767,7 @@ def submit_invoice(invoice, data):
                     "total_cash": total_cash,
                     "cash_account": cash_account,
                     "payments": payments,
+                    "idempotency_key": idempotency_key,
                 },
             )
     else:
@@ -766,7 +776,17 @@ def submit_invoice(invoice, data):
             invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
         )
 
-    return {"name": invoice_doc.name, "status": invoice_doc.docstatus}
+    result = {"name": invoice_doc.name, "status": invoice_doc.docstatus}
+    
+    # Store the result for idempotency
+    if idempotency_key:
+        frappe.cache().set_value(
+            f"posa_idempotent_{idempotency_key}", 
+            result,
+            expires_in_sec=86400  # 24 hours
+        )
+        
+    return result
 
 
 def set_batch_nos_for_bundels(doc, warehouse_field, throw=False):
@@ -897,6 +917,14 @@ def submit_in_background_job(kwargs):
     total_cash = kwargs.get("total_cash")
     cash_account = kwargs.get("cash_account")
     payments = kwargs.get("payments")
+    idempotency_key = kwargs.get("idempotency_key")
+
+    # Check if we already processed this request (for idempotency)
+    if idempotency_key:
+        processed_result = frappe.cache().get_value(f"posa_idempotent_{idempotency_key}")
+        if processed_result:
+            # Already processed, do nothing
+            return processed_result
 
     invoice_doc = frappe.get_doc("Sales Invoice", invoice)
     
@@ -918,6 +946,18 @@ def submit_in_background_job(kwargs):
     redeeming_customer_credit(
         invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
     )
+    
+    result = {"name": invoice_doc.name, "status": invoice_doc.docstatus}
+    
+    # Store the result for idempotency
+    if idempotency_key:
+        frappe.cache().set_value(
+            f"posa_idempotent_{idempotency_key}",
+            result,
+            expires_in_sec=86400  # 24 hours
+        )
+        
+    return result
 
 
 @frappe.whitelist()

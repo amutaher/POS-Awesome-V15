@@ -70,6 +70,12 @@ doctype_js = {
 # before_uninstall = "posawesome.uninstall.before_uninstall"
 after_uninstall = "posawesome.uninstall.after_uninstall"
 
+# Bench build hooks
+after_app_install = "posawesome.setup.install.after_install"
+after_app_reinstall = "posawesome.setup.install.after_install"
+before_app_build = "posawesome.setup.install.before_build"
+after_app_build = "posawesome.setup.install.after_build"
+
 # Desk Notifications
 # ------------------
 # See frappe.core.notifications.get_notification_config

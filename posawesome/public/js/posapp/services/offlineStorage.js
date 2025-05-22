@@ -1,12 +1,17 @@
 /**
  * Enhanced IndexedDB wrapper for offline storage in POS Awesome
  */
+import { v4 as uuidv4 } from 'uuid';
+
 export default class OfflineStorage {
   constructor(dbName = 'posAwesomeDB', version = 1) {
     this.dbName = dbName;
     this.version = version;
     this.db = null;
     this.isOnline = navigator.onLine;
+    
+    // Setup the ready promise that can be awaited by the app
+    this.ready = this.init();
     
     // Listen for online/offline events
     window.addEventListener('online', this.handleOnlineStatusChange.bind(this));
@@ -87,9 +92,13 @@ export default class OfflineStorage {
         }
         
         if (!db.objectStoreNames.contains('pendingInvoices')) {
-          const store = db.createObjectStore('pendingInvoices', { keyPath: 'local_id', autoIncrement: true });
+          const store = db.createObjectStore('pendingInvoices', { keyPath: 'id' });
           store.createIndex('status', 'status', { unique: false });
           store.createIndex('timestamp', 'timestamp', { unique: false });
+        }
+        
+        if (!db.objectStoreNames.contains('conflicts')) {
+          db.createObjectStore('conflicts', { keyPath: 'id' });
         }
         
         if (!db.objectStoreNames.contains('invoices')) {
@@ -115,13 +124,10 @@ export default class OfflineStorage {
    * @param {Object} data The data to store
    * @returns {Promise} Promise that resolves when data is stored
    */
-  saveData(storeName, data) {
+  async saveData(storeName, data) {
+    await this.ready;
+    
     return new Promise((resolve, reject) => {
-      if (!this.db) {
-        reject('Database not initialized');
-        return;
-      }
-
       const transaction = this.db.transaction([storeName], 'readwrite');
       const store = transaction.objectStore(storeName);
       const request = store.put(data);
@@ -137,13 +143,10 @@ export default class OfflineStorage {
    * @param {Array} items Array of items to store
    * @returns {Promise} Promise that resolves when all items are stored
    */
-  saveMultipleData(storeName, items) {
+  async saveMultipleData(storeName, items) {
+    await this.ready;
+    
     return new Promise((resolve, reject) => {
-      if (!this.db) {
-        reject('Database not initialized');
-        return;
-      }
-
       const transaction = this.db.transaction([storeName], 'readwrite');
       const store = transaction.objectStore(storeName);
       
@@ -181,13 +184,10 @@ export default class OfflineStorage {
    * @param {string|number} id The ID of the data to retrieve
    * @returns {Promise} Promise that resolves with the retrieved data
    */
-  getData(storeName, id) {
+  async getData(storeName, id) {
+    await this.ready;
+    
     return new Promise((resolve, reject) => {
-      if (!this.db) {
-        reject('Database not initialized');
-        return;
-      }
-
       const transaction = this.db.transaction([storeName], 'readonly');
       const store = transaction.objectStore(storeName);
       const request = store.get(id);
@@ -202,13 +202,10 @@ export default class OfflineStorage {
    * @param {string} storeName The name of the object store
    * @returns {Promise} Promise that resolves with all data in the store
    */
-  getAllData(storeName) {
+  async getAllData(storeName) {
+    await this.ready;
+    
     return new Promise((resolve, reject) => {
-      if (!this.db) {
-        reject('Database not initialized');
-        return;
-      }
-
       const transaction = this.db.transaction([storeName], 'readonly');
       const store = transaction.objectStore(storeName);
       const request = store.getAll();
@@ -225,13 +222,10 @@ export default class OfflineStorage {
    * @param {any} value The value to query
    * @returns {Promise} Promise that resolves with matching data
    */
-  getDataByIndex(storeName, indexName, value) {
+  async getDataByIndex(storeName, indexName, value) {
+    await this.ready;
+    
     return new Promise((resolve, reject) => {
-      if (!this.db) {
-        reject('Database not initialized');
-        return;
-      }
-
       const transaction = this.db.transaction([storeName], 'readonly');
       const store = transaction.objectStore(storeName);
       const index = store.index(indexName);
@@ -248,18 +242,15 @@ export default class OfflineStorage {
    * @param {string|number} id The ID of the data to delete
    * @returns {Promise} Promise that resolves when data is deleted
    */
-  deleteData(storeName, id) {
+  async deleteData(storeName, id) {
+    await this.ready;
+    
     return new Promise((resolve, reject) => {
-      if (!this.db) {
-        reject('Database not initialized');
-        return;
-      }
-
       const transaction = this.db.transaction([storeName], 'readwrite');
       const store = transaction.objectStore(storeName);
       const request = store.delete(id);
 
-      request.onsuccess = () => resolve();
+      request.onsuccess = () => resolve(true);
       request.onerror = () => reject(request.error);
     });
   }
@@ -267,271 +258,273 @@ export default class OfflineStorage {
   /**
    * Clear all data from the specified object store
    * @param {string} storeName The name of the object store
-   * @returns {Promise} Promise that resolves when the store is cleared
+   * @returns {Promise} Promise that resolves when store is cleared
    */
-  clearStore(storeName) {
+  async clearStore(storeName) {
+    await this.ready;
+    
     return new Promise((resolve, reject) => {
-      if (!this.db) {
-        reject('Database not initialized');
-        return;
-      }
-
       const transaction = this.db.transaction([storeName], 'readwrite');
       const store = transaction.objectStore(storeName);
       const request = store.clear();
 
-      request.onsuccess = () => resolve();
+      request.onsuccess = () => resolve(true);
       request.onerror = () => reject(request.error);
     });
   }
 
   /**
-   * Queue an invoice for submission when back online
-   * @param {Object} invoice The invoice to queue
-   * @returns {Promise} Promise that resolves when invoice is queued
+   * Queue an invoice for processing when online
+   * @param {Object} invoice The invoice data
+   * @returns {Promise<string>} Promise that resolves with the ID of the queued invoice
    */
-  queuePendingInvoice(invoice) {
-    const now = new Date();
+  async queuePendingInvoice(invoice) {
+    await this.ready;
     
-    // Make a safe copy of the invoice data by removing non-serializable objects
-    // and ensuring arrays are properly converted
-    const preprocessInvoice = (obj) => {
-      // If null or primitive type, return as is
-      if (obj === null || typeof obj !== 'object') {
-        return obj;
-      }
-      
-      // Handle arrays by making a serializable copy
-      if (Array.isArray(obj)) {
-        return obj.map(item => preprocessInvoice(item));
-      }
-      
-      // For objects, create a clean copy
-      const cleanObj = {};
-      for (const key in obj) {
-        if (obj.hasOwnProperty(key)) {
-          // Skip functions, DOM nodes and other non-serializable elements
-          if (typeof obj[key] === 'function' || 
-              obj[key] instanceof Node ||
-              key === '__ob__' ||  // Skip Vue observers
-              key === '_data') {   // Skip Vue internal data
-            continue;
-          }
-          
-          // Handle nested objects/arrays
-          cleanObj[key] = preprocessInvoice(obj[key]);
-        }
-      }
-      return cleanObj;
+    // Create an envelope with a UUID for idempotency
+    const id = uuidv4();
+    const envelope = {
+      id,
+      data: invoice,
+      status: 'pending',
+      timestamp: new Date().toISOString(),
+      attempts: 0
     };
-
-    // Process the invoice to make it serializable
-    let safeInvoice;
-    try {
-      if (invoice.invoice_data) {
-        // If invoice_data already exists, we need to preprocess it
-        safeInvoice = {
-          ...invoice,
-          invoice_data: preprocessInvoice(invoice.invoice_data)
-        };
-      } else {
-        // If invoice is the direct data, preprocess it
-        safeInvoice = {
-          invoice_data: preprocessInvoice(invoice),
-          local_id: invoice.local_id || ('local_' + now.getTime())
-        };
-      }
-      
-      // Add metadata
-      const invoiceWithMeta = {
-        ...safeInvoice,
-        timestamp: now.toISOString(),
-        status: 'pending',
-        sync_attempts: 0
-      };
-      
-      return this.saveData('pendingInvoices', invoiceWithMeta);
-    } catch (error) {
-      console.error('Error preprocessing invoice for offline storage:', error);
-      throw new Error('Failed to prepare invoice for offline storage: ' + error.message);
-    }
+    
+    await this.saveData('pendingInvoices', envelope);
+    return id;
   }
 
   /**
    * Get all pending invoices
-   * @returns {Promise} Promise that resolves with all pending invoices
+   * @returns {Promise<Array>} Promise that resolves with all pending invoices
    */
-  getPendingInvoices() {
-    return this.getDataByIndex('pendingInvoices', 'status', 'pending');
+  async getPendingInvoices() {
+    await this.ready;
+    return this.getAllData('pendingInvoices');
   }
-  
+
   /**
-   * Cache POS profile for offline use
-   * @param {Object} profile POS profile data
-   * @returns {Promise} Promise that resolves when profile is cached
+   * Get all conflict invoices
+   * @returns {Promise<Array>} Promise that resolves with all conflicts
    */
-  cachePosProfile(profile) {
+  async getConflicts() {
+    await this.ready;
+    return this.getAllData('conflicts');
+  }
+
+  /**
+   * Cache the POS profile for offline use
+   * @param {Object} profile The POS profile data
+   * @returns {Promise} Promise that resolves when data is stored
+   */
+  async cachePosProfile(profile) {
+    await this.ready;
     return this.saveData('posProfile', profile);
   }
-  
+
   /**
    * Cache items for offline use
-   * @param {Array} items Array of items 
+   * @param {Array} items Array of items to cache
    * @returns {Promise} Promise that resolves when items are cached
    */
-  cacheItems(items) {
+  async cacheItems(items) {
+    await this.ready;
     return this.saveMultipleData('items', items);
   }
-  
+
   /**
    * Cache customers for offline use
-   * @param {Array} customers Array of customers
+   * @param {Array} customers Array of customers to cache
    * @returns {Promise} Promise that resolves when customers are cached
    */
-  cacheCustomers(customers) {
+  async cacheCustomers(customers) {
+    await this.ready;
     return this.saveMultipleData('customers', customers);
   }
-  
+
   /**
-   * Save completed invoice
-   * @param {Object} invoice Invoice data
+   * Save an invoice
+   * @param {Object} invoice The invoice data
    * @returns {Promise} Promise that resolves when invoice is saved
    */
-  saveInvoice(invoice) {
+  async saveInvoice(invoice) {
+    await this.ready;
     return this.saveData('invoices', invoice);
   }
-  
+
   /**
-   * Trigger sync of pending data
+   * Trigger sync with server
    */
-  triggerSync() {
-    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-      navigator.serviceWorker.ready.then(registration => {
-        return registration.sync.register('sync-pending-invoices');
-      }).catch(err => {
-        console.error('Error registering sync:', err);
-        // Fallback for browsers that don't support Background Sync
+  async triggerSync() {
+    await this.ready;
+    
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      if ('sync' in navigator.serviceWorker.controller) {
+        try {
+          await navigator.serviceWorker.ready;
+          await navigator.serviceWorker.controller.sync.register('sync-pending-invoices');
+          return true;
+        } catch (error) {
+          console.error('Failed to register sync:', error);
+          this.processPendingInvoices();
+          return false;
+        }
+      } else {
+        // Fallback for browsers without Background Sync
         this.processPendingInvoices();
-      });
-    } else {
-      // Fallback if service worker is not available
-      this.processPendingInvoices();
+        return false;
+      }
     }
+    return false;
   }
-  
+
   /**
-   * Process pending invoices and submit to server
+   * Process pending invoices
+   * @returns {Promise} Promise that resolves when all invoices are processed
    */
   async processPendingInvoices() {
-    if (!this.isOnline) {
-      console.log('Cannot process pending invoices while offline');
-      return;
-    }
+    await this.ready;
     
-    try {
-      const pendingInvoices = await this.getPendingInvoices();
-      
-      if (!pendingInvoices || pendingInvoices.length === 0) {
-        console.log('No pending invoices to sync');
-        return;
-      }
-      
-      console.log(`Processing ${pendingInvoices.length} pending invoices`);
-      
-      for (const invoice of pendingInvoices) {
+    if (!this.isOnline) {
+      console.log('Cannot process invoices while offline');
+      return false;
+    }
+
+    const pendingInvoices = await this.getPendingInvoices();
+    
+    if (!pendingInvoices || pendingInvoices.length === 0) {
+      console.log('No pending invoices to process');
+      return true;
+    }
+
+    console.log(`Processing ${pendingInvoices.length} pending invoices`);
+    
+    // Process each invoice
+    const results = await Promise.allSettled(
+      pendingInvoices.map(async (envelope) => {
         try {
-          // Update sync attempt count
-          invoice.sync_attempts += 1;
-          await this.saveData('pendingInvoices', invoice);
+          // Update attempts counter
+          envelope.attempts += 1;
+          await this.saveData('pendingInvoices', envelope);
           
-          // Make sure invoice data is properly formatted 
-          let invoiceData = invoice.invoice_data;
-          
-          // Ensure pos_profile is properly formatted as JSON
-          if (invoiceData.pos_profile && typeof invoiceData.pos_profile === 'string') {
-            try {
-              // Try parsing it first to see if it's already JSON
-              JSON.parse(invoiceData.pos_profile);
-            } catch (e) {
-              // If it fails to parse, it's a string that needs to be JSON
-              const profileObj = { name: invoiceData.pos_profile };
-              invoiceData.pos_profile = JSON.stringify(profileObj);
-              console.log('Fixed pos_profile format for sync');
-            }
-          }
-          
-          // Submit invoice to server using frappe.call
-          const result = await frappe.call({
-            method: 'posawesome.posawesome.api.posapp.submit_invoice',
-            args: { invoice: invoiceData },
-            freeze: false
+          // Submit the invoice with idempotency key
+          const response = await fetch('/api/method/posawesome.posawesome.api.posapp.submit_invoice', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Idempotency-Key': envelope.id
+            },
+            body: JSON.stringify(envelope.data)
           });
           
-          if (result.message && result.message.name) {
-            console.log(`Invoice ${result.message.name} synced successfully`);
-            
-            // Save the submitted invoice to the invoices store
-            await this.saveInvoice({
-              ...invoice.invoice_data,
-              name: result.message.name,
-              sync_status: 'synced'
-            });
-            
-            // Remove from pending queue
-            await this.deleteData('pendingInvoices', invoice.local_id);
+          const result = await response.json();
+          
+          if (response.status === 409) {
+            // Conflict detected, move to conflicts store
+            await this.saveData('conflicts', envelope);
+            await this.deleteData('pendingInvoices', envelope.id);
+            return { status: 'conflict', id: envelope.id };
+          } else if (result.error) {
+            // Server error
+            if (envelope.attempts >= 3) {
+              // Move to conflicts after 3 attempts
+              envelope.status = 'failed';
+              envelope.error = result.error;
+              await this.saveData('conflicts', envelope);
+              await this.deleteData('pendingInvoices', envelope.id);
+              return { status: 'failed', id: envelope.id, error: result.error };
+            }
+            return { status: 'retry', id: envelope.id };
           } else {
-            console.error('Error syncing invoice:', result);
-            invoice.status = invoice.sync_attempts >= 3 ? 'failed' : 'pending';
-            invoice.error = JSON.stringify(result);
-            await this.saveData('pendingInvoices', invoice);
+            // Success
+            await this.deleteData('pendingInvoices', envelope.id);
+            if (result.invoice) {
+              await this.saveInvoice(result.invoice);
+            }
+            return { status: 'success', id: envelope.id };
           }
         } catch (error) {
-          console.error('Error processing invoice:', error);
-          invoice.status = invoice.sync_attempts >= 3 ? 'failed' : 'pending';
-          invoice.error = error.message || 'Unknown error';
-          await this.saveData('pendingInvoices', invoice);
+          console.error(`Error processing invoice ${envelope.id}:`, error);
+          if (envelope.attempts >= 3) {
+            // Move to conflicts after 3 attempts
+            envelope.status = 'failed';
+            envelope.error = error.message;
+            await this.saveData('conflicts', envelope);
+            await this.deleteData('pendingInvoices', envelope.id);
+            return { status: 'failed', id: envelope.id, error: error.message };
+          }
+          return { status: 'retry', id: envelope.id };
         }
-      }
-      
-      // Notify app that syncing is complete
-      window.dispatchEvent(new CustomEvent('pos-awesome-sync-complete'));
-    } catch (error) {
-      console.error('Error in processPendingInvoices:', error);
-    }
+      })
+    );
+
+    return results;
   }
-  
+
   /**
-   * Check if data is available offline
-   * @returns {Promise<Object>} Object with availability status
+   * Resolve a conflict by either retrying or discarding
+   * @param {string} id The ID of the conflict
+   * @param {string} action Either 'retry' or 'discard'
+   * @returns {Promise<Object>} Result of the resolution
+   */
+  async resolveConflict(id, action) {
+    await this.ready;
+    
+    const conflict = await this.getData('conflicts', id);
+    if (!conflict) {
+      return { status: 'error', message: 'Conflict not found' };
+    }
+    
+    if (action === 'retry') {
+      // Move back to pending invoices
+      conflict.attempts = 0;
+      conflict.status = 'pending';
+      await this.saveData('pendingInvoices', conflict);
+      await this.deleteData('conflicts', id);
+      await this.triggerSync();
+      return { status: 'retrying', id };
+    } else if (action === 'discard') {
+      // Delete the conflict
+      await this.deleteData('conflicts', id);
+      return { status: 'discarded', id };
+    }
+    
+    return { status: 'error', message: 'Invalid action' };
+  }
+
+  /**
+   * Check if required offline data is available
+   * @returns {Promise<Object>} Status of offline data availability
    */
   async checkOfflineDataAvailability() {
-    try {
-      const items = await this.getAllData('items');
-      const customers = await this.getAllData('customers');
-      const posProfile = await this.getAllData('posProfile');
-      
-      return {
-        itemsAvailable: items && items.length > 0,
-        customersAvailable: customers && customers.length > 0,
-        posProfileAvailable: posProfile && posProfile.length > 0,
-        isReady: items && items.length > 0 && 
-                customers && customers.length > 0 && 
-                posProfile && posProfile.length > 0
-      };
-    } catch (error) {
-      console.error('Error checking offline data availability:', error);
-      return {
-        itemsAvailable: false,
-        customersAvailable: false,
-        posProfileAvailable: false,
-        isReady: false,
-        error: error.message
-      };
-    }
+    await this.ready;
+    
+    const items = await this.getAllData('items');
+    const customers = await this.getAllData('customers');
+    const posProfile = await this.getAllData('posProfile');
+    
+    return {
+      itemsAvailable: items && items.length > 0,
+      customersAvailable: customers && customers.length > 0,
+      posProfileAvailable: posProfile && posProfile.length > 0,
+      offlineReady: 
+        (items && items.length > 0) && 
+        (customers && customers.length > 0) && 
+        (posProfile && posProfile.length > 0)
+    };
   }
-  
+
   /**
-   * Clean up resources and event listeners
+   * Manual sync trigger for browsers without Background Sync
+   * @returns {Promise} Promise that resolves when sync completes
+   */
+  async manualSync() {
+    return this.processPendingInvoices();
+  }
+
+  /**
+   * Destroy the database connection
    */
   destroy() {
     window.removeEventListener('online', this.handleOnlineStatusChange);
