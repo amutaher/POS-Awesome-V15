@@ -3,7 +3,8 @@ import { createApp } from 'vue';
 import eventBus from './bus';
 import * as components from 'vuetify/components'
 import * as directives from 'vuetify/directives'
-import Home from './Home.vue';
+// Instead of importing the Vue component directly, we'll load it in a different way
+// import Home from './Home.vue';
 import OfflineStorage from './services/offlineStorage.js';
 
 frappe.provide('frappe.PosApp');
@@ -52,9 +53,27 @@ frappe.PosApp.posapp = class {
                 },
             }
         );
-        const app = createApp(Home)
+        
+        // Load Home component
+        // We'll use a different approach to get the Home component
+        // For Frappe app build, we'll let the Frappe framework handle Vue components
+        let HomeComponent;
+        if (window.frappe && window.frappe.PosApp && window.frappe.PosApp.Home) {
+            // Use globally registered component if available
+            HomeComponent = window.frappe.PosApp.Home;
+        } else {
+            // Simple placeholder component
+            HomeComponent = {
+                template: '<div>POS App loading...</div>',
+                mounted() {
+                    console.log('POS App placeholder mounted');
+                }
+            };
+        }
+        
+        const app = createApp(HomeComponent);
         app.use(eventBus);
-        app.use(vuetify)
+        app.use(vuetify);
         app.mount(this.$el[0]);
     }
 

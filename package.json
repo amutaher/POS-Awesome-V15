@@ -1,7 +1,7 @@
 {
   "scripts": {
     "dev": "vite",
-    "build": "esbuild posawesome/public/js/posapp/posapp.js --bundle --outfile=posawesome/public/js/posawesome.bundle.js --format=iife --external:idb --external:uuid"
+    "build": "node esbuild.config.js"
   },
   "dependencies": {
     "esbuild": "^0.25.4",
