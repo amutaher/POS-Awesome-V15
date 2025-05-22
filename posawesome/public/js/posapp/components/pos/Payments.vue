@@ -626,6 +626,8 @@ export default {
   mixins: [format],
   data() {
     return {
+      // Safety for broken eventBus operations  
+      offlineInvoiceProcessed: false, // Flag to prevent double processing
       loading: false, // UI loading state
       pos_profile: "", // POS profile settings
       pos_settings: "", // POS settings
@@ -968,9 +970,20 @@ export default {
     },
     // Submit invoice to backend after all validations
     submit_invoice(print) {
+      // Prevent duplicate submissions
+      if (this.offlineInvoiceProcessed) {
+        console.log("Skipping duplicate invoice submission - already processed");
+        return;
+      }
+      
       // For return invoices, ensure payments are negative one last time
       if (this.invoice_doc.is_return) {
         this.ensureReturnPaymentsAreNegative();
+      }
+      
+      // Set flag to prevent double processing during offline mode
+      if (this.isOffline) {
+        this.offlineInvoiceProcessed = true;
       }
       let totalPayedAmount = 0;
       this.invoice_doc.payments.forEach((payment) => {
@@ -1518,11 +1531,24 @@ export default {
     
     // Handle saving invoice to offline storage
     async saveInvoiceOffline() {
+      // Prevent duplicate saves
+      if (this.offlineInvoiceProcessed) {
+        console.log("Skipping duplicate offline invoice save - already processed");
+        return true;
+      }
+      
+      // Set flag to prevent double processing
+      this.offlineInvoiceProcessed = true;
+      
       if (!this.offlineStorage) {
-        this.eventBus.emit('show_message', {
-          title: __('Cannot save offline: Offline storage not initialized'),
-          color: 'error'
-        });
+        try {
+          frappe.show_alert({
+            message: __('Cannot save offline: Offline storage not initialized'),
+            indicator: 'red'
+          }, 5);
+        } catch (err) {
+          alert(__('Cannot save offline: Offline storage not initialized'));
+        }
         return false;
       }
       
