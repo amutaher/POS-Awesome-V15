@@ -635,49 +635,10 @@ def update_invoice(data):
 
 @frappe.whitelist()
 def submit_invoice(invoice, data):
-    # Check for idempotency key in request headers
-    idempotency_key = frappe.request.headers.get('Idempotency-Key')
-    if idempotency_key:
-        # Check if this invoice has already been processed with this key
-        existing_invoice = frappe.db.exists(
-            "POS Idempotency Key", 
-            {"idempotency_key": idempotency_key, "status": "Success"}
-        )
-        
-        if existing_invoice:
-            # Get the previously processed invoice details
-            processed_record = frappe.get_doc("POS Idempotency Key", existing_invoice)
-            return {
-                "name": processed_record.reference_document, 
-                "status": 1,
-                "idempotent": True
-            }
-        
-        # Create a record that we're processing this request
-        idempotency_record = frappe.get_doc({
-            "doctype": "POS Idempotency Key",
-            "idempotency_key": idempotency_key,
-            "timestamp": frappe.utils.now_datetime(),
-            "status": "Processing",
-            "data": json.dumps({
-                "invoice": invoice,
-                "data": data
-            })
-        })
-        idempotency_record.insert(ignore_permissions=True)
-    
-    # Regular processing starts here
     data = json.loads(data)
     invoice = json.loads(invoice)
-    
-    # Handle offline invoices with their own IDs
-    if not invoice.get("name") and invoice.get("offline_saved"):
-        # Create a new Sales Invoice for the offline data
-        invoice_doc = create_invoice_from_offline_data(invoice, data)
-    else:
-        invoice_doc = frappe.get_doc("Sales Invoice", invoice.get("name"))
-        invoice_doc.update(invoice)
-    
+    invoice_doc = frappe.get_doc("Sales Invoice", invoice.get("name"))
+    invoice_doc.update(invoice)
     if invoice.get("posa_delivery_date"):
         invoice_doc.update_stock = 0
     mop_cash_list = [
@@ -760,118 +721,52 @@ def submit_invoice(invoice, data):
     invoice_doc.flags.ignore_permissions = True
     frappe.flags.ignore_account_permission = True
     invoice_doc.posa_is_printed = 1
-    
-    try:
-        invoice_doc.save()
+    invoice_doc.save()
 
-        if data.get("due_date"):
-            frappe.db.set_value(
-                "Sales Invoice",
-                invoice_doc.name,
-                "due_date",
-                data.get("due_date"),
-                update_modified=False,
-            )
+    if data.get("due_date"):
+        frappe.db.set_value(
+            "Sales Invoice",
+            invoice_doc.name,
+            "due_date",
+            data.get("due_date"),
+            update_modified=False,
+        )
 
-        if frappe.get_value(
-            "POS Profile",
-            invoice_doc.pos_profile,
-            "posa_allow_submissions_in_background_job",
-        ):
-            invoices_list = frappe.get_all(
-                "Sales Invoice",
-                filters={
-                    "posa_pos_opening_shift": invoice_doc.posa_pos_opening_shift,
-                    "docstatus": 0,
-                    "posa_is_printed": 1,
+    if frappe.get_value(
+        "POS Profile",
+        invoice_doc.pos_profile,
+        "posa_allow_submissions_in_background_job",
+    ):
+        invoices_list = frappe.get_all(
+            "Sales Invoice",
+            filters={
+                "posa_pos_opening_shift": invoice_doc.posa_pos_opening_shift,
+                "docstatus": 0,
+                "posa_is_printed": 1,
+            },
+        )
+        for invoice in invoices_list:
+            enqueue(
+                method=submit_in_background_job,
+                queue="short",
+                timeout=1000,
+                is_async=True,
+                kwargs={
+                    "invoice": invoice.name,
+                    "data": data,
+                    "is_payment_entry": is_payment_entry,
+                    "total_cash": total_cash,
+                    "cash_account": cash_account,
+                    "payments": payments,
                 },
             )
-            for invoice in invoices_list:
-                enqueue(
-                    method=submit_in_background_job,
-                    queue="short",
-                    timeout=1000,
-                    is_async=True,
-                    kwargs={
-                        "invoice": invoice.name,
-                        "data": data,
-                        "is_payment_entry": is_payment_entry,
-                        "total_cash": total_cash,
-                        "cash_account": cash_account,
-                        "payments": payments,
-                        "idempotency_key": idempotency_key
-                    },
-                )
-        else:
-            invoice_doc.submit()
-            redeeming_customer_credit(
-                invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
-            )
-        
-        # Update idempotency record if we have one
-        if idempotency_key:
-            idempotency_record.status = "Success"
-            idempotency_record.reference_document = invoice_doc.name
-            idempotency_record.save(ignore_permissions=True)
-            
-        return {"name": invoice_doc.name, "status": invoice_doc.docstatus}
-    
-    except Exception as e:
-        # Mark the idempotency record as failed
-        if idempotency_key:
-            idempotency_record.status = "Failed"
-            idempotency_record.error = str(e)
-            idempotency_record.save(ignore_permissions=True)
-        
-        # Re-raise the exception
-        raise e
+    else:
+        invoice_doc.submit()
+        redeeming_customer_credit(
+            invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
+        )
 
-
-def create_invoice_from_offline_data(invoice_data, payment_data):
-    """Create a new Sales Invoice from offline data"""
-    # Create a new Sales Invoice
-    pos_profile_name = invoice_data.get("pos_profile")
-    pos_profile = frappe.get_doc("POS Profile", pos_profile_name) if pos_profile_name else None
-    
-    if not pos_profile:
-        frappe.throw(_("POS Profile is required for creating invoice from offline data"))
-    
-    new_invoice = frappe.new_doc("Sales Invoice")
-    new_invoice.customer = invoice_data.get("customer")
-    new_invoice.is_pos = 1
-    new_invoice.pos_profile = pos_profile_name
-    new_invoice.company = invoice_data.get("company") or pos_profile.company
-    new_invoice.currency = invoice_data.get("currency") or pos_profile.currency
-    
-    # Set opening entry details
-    if invoice_data.get("posa_pos_opening_shift"):
-        new_invoice.posa_pos_opening_shift = invoice_data.get("posa_pos_opening_shift")
-    
-    # Add items
-    if invoice_data.get("items"):
-        for item_data in invoice_data.get("items"):
-            new_invoice.append("items", item_data)
-    
-    # Add payments
-    if invoice_data.get("payments"):
-        for payment_data in invoice_data.get("payments"):
-            new_invoice.append("payments", payment_data)
-    
-    # Add any additional fields
-    if invoice_data.get("posting_date"):
-        new_invoice.posting_date = invoice_data.get("posting_date")
-    
-    if invoice_data.get("posting_time"):
-        new_invoice.posting_time = invoice_data.get("posting_time")
-    
-    # Set as offline invoice
-    new_invoice.posa_is_offline = 1
-    
-    # Set additional metadata
-    if invoice_data.get("offline_timestamp"):
-        new_invoice.posa_offline_timestamp = invoice_data.get("offline_timestamp")
-    
-    return new_invoice
+    return {"name": invoice_doc.name, "status": invoice_doc.docstatus}
 
 
 def set_batch_nos_for_bundels(doc, warehouse_field, throw=False):
@@ -1002,7 +897,6 @@ def submit_in_background_job(kwargs):
     total_cash = kwargs.get("total_cash")
     cash_account = kwargs.get("cash_account")
     payments = kwargs.get("payments")
-    idempotency_key = kwargs.get("idempotency_key")
 
     invoice_doc = frappe.get_doc("Sales Invoice", invoice)
     
@@ -1024,23 +918,6 @@ def submit_in_background_job(kwargs):
     redeeming_customer_credit(
         invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
     )
-    
-    # Update idempotency record if we have one
-    if idempotency_key:
-        try:
-            # Get the record if it exists
-            idempotency_record = frappe.get_doc("POS Idempotency Key", {
-                "idempotency_key": idempotency_key,
-                "status": "Processing"
-            })
-            
-            # Update it with the success status
-            if idempotency_record:
-                idempotency_record.status = "Success"
-                idempotency_record.reference_document = invoice_doc.name
-                idempotency_record.save(ignore_permissions=True)
-        except Exception as e:
-            frappe.log_error(f"Failed to update idempotency record: {str(e)}", "POS Idempotency Error")
 
 
 @frappe.whitelist()

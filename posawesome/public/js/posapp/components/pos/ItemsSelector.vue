@@ -191,28 +191,20 @@ export default {
       }
       if (
         vm.pos_profile.posa_local_storage &&
-        !vm.pos_profile.pose_use_limit_search &&
-        window.offlineStorage
+        localStorage.items_storage &&
+        !vm.pos_profile.pose_use_limit_search
       ) {
-        // Try to load from IndexedDB
-        window.offlineStorage.getAllData('items').then(cached => {
-          if (cached && cached.length) {
-            vm.items = cached;
-            this.eventBus.emit("set_all_items", vm.items);
-            vm.loading = false;
-            vm.items_loaded = true;
-            
-            // Refresh quantities after loading from IndexedDB
-            setTimeout(() => {
-              if (vm.filtered_items && vm.filtered_items.length > 0) {
-                vm.update_items_details(vm.filtered_items);
-              }
-            }, 300);
-            return;
+        vm.items = JSON.parse(localStorage.getItem("items_storage"));
+        this.eventBus.emit("set_all_items", vm.items);
+        vm.loading = false;
+        vm.items_loaded = true;
+        
+        // Even when loading from localStorage, refresh the quantities
+        setTimeout(() => {
+          if (vm.filtered_items && vm.filtered_items.length > 0) {
+            vm.update_items_details(vm.filtered_items);
           }
-        }).catch(err => {
-          console.error('Error loading items from IndexedDB:', err);
-        });
+        }, 300);
       }
       frappe.call({
         method: "posawesome.posawesome.api.posapp.get_items",
@@ -243,14 +235,16 @@ export default {
             
             if (
               vm.pos_profile.posa_local_storage &&
-              !vm.pos_profile.pose_use_limit_search &&
-              window.offlineStorage
+              !vm.pos_profile.pose_use_limit_search
             ) {
+              localStorage.setItem("items_storage", "");
               try {
-                // Cache items in IndexedDB
-                window.offlineStorage.cacheItems(r.message);
+                localStorage.setItem(
+                  "items_storage",
+                  JSON.stringify(r.message)
+                );
               } catch (e) {
-                console.error('Error caching items in IndexedDB:', e);
+                console.error(e);
               }
             }
             if (vm.pos_profile.pose_use_limit_search) {
