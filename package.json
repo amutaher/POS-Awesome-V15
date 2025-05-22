@@ -2,6 +2,7 @@
   "scripts": {
     "dev": "vite",
     "build": "node posawesome/www/pwa-build.js",
+    "build:pwa": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {

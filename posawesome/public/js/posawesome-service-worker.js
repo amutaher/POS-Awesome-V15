@@ -2,7 +2,7 @@
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/posawesome/public/service-worker.js', { scope: '/' })
+    navigator.serviceWorker.register('/assets/posawesome/dist/service-worker.js', { scope: '/' })
       .then(registration => {
         console.log('POS Awesome Service Worker registered with scope:', registration.scope);
         

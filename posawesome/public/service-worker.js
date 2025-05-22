@@ -1,12 +1,7 @@
-// Import Workbox core modules
-importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
+// Import Workbox core modules from workbox-precaching package
+// This will be replaced by the injectManifest plugin during build
 
-// Initialize workbox
-workbox.setConfig({
-  debug: false
-});
-
-const { precacheAndRoute, cleanupOutdatedCaches } = workbox.precaching;
+import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching';
 
 // Use Workbox precaching to automatically handle cache versioning
 // self.__WB_MANIFEST is injected by the Workbox build process

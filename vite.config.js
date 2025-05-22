@@ -1,23 +1,23 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { VitePWA } from 'vite-plugin-pwa';
+import path from 'path';
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     vue(),
     VitePWA({
-      registerType: 'autoUpdate',
-      injectRegister: 'auto',
+      mode: 'production',
+      base: '/',
       strategies: 'injectManifest',
+      srcDir: './',
+      filename: 'public/sw.js',
       injectManifest: {
         injectionPoint: 'self.__WB_MANIFEST',
         swSrc: './posawesome/public/service-worker.js',
-        swDest: './posawesome/public/service-worker.js',
-        globDirectory: './posawesome/public/',
-        globPatterns: [
-          '**/*.{js,css,html,ico,png,svg,jpg,jpeg,json}'
-        ],
+        swDest: './posawesome/public/dist/service-worker.js',
+        maximumFileSizeToCacheInBytes: 5000000,
       },
       devOptions: {
         enabled: true,
@@ -60,13 +60,19 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        main: './posawesome/public/js/posapp/posapp.js'
+        main: path.resolve(__dirname, './posawesome/public/js/posapp/posapp.js'),
+        sw: path.resolve(__dirname, './public/sw.js')
       },
       output: {
         entryFileNames: '[name].[hash].js',
         chunkFileNames: '[name].[hash].js',
         assetFileNames: '[name].[hash].[ext]'
       }
+    }
+  },
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './posawesome/public/js/posapp')
     }
   }
 }); 
