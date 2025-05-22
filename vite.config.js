@@ -34,16 +34,17 @@ export default defineConfig({
   plugins: [
     vue(),
     VitePWA({
-      mode: 'production',
+      mode: 'development',
       base: '/',
       strategies: 'injectManifest',
       srcDir: '.',
       filename: 'public/sw.js',
       injectManifest: {
         injectionPoint: 'self.__WB_MANIFEST',
-        swSrc: './posawesome/public/service-worker.js',
-        swDest: './posawesome/public/dist/service-worker.js',
+        swSrc: path.resolve(__dirname, './posawesome/public/service-worker.js'),
+        swDest: path.resolve(__dirname, './posawesome/public/dist/service-worker.js'),
         maximumFileSizeToCacheInBytes: 5000000,
+        dontCacheBustURLsMatching: /\.\w{8}\./,
       },
       devOptions: {
         enabled: true,
