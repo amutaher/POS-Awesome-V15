@@ -1055,59 +1055,45 @@ export default {
           vm.sales_person = "";
           vm.addresses = [];
           
-          // Now emit events with proper data
-          try {
-            // Use direct DOM for critical functions instead of event bus
-            // Store successful invoice name for reference
-            window.lastSubmittedInvoice = invoiceName;
-            // Store invoice doc in global variable for reference
-            window.lastSubmittedInvoiceDoc = r.message;
-            
-            // Show message directly without event bus
+          // Now process successful payment
+          // IMPORTANT: Don't use eventBus for critical operations where we've seen errors
+          
+          // Store data globally
+          window.lastSubmittedInvoice = invoiceName;
+          window.lastSubmittedInvoiceDoc = r.message;
+          
+          // Show message directly using Frappe's native API
+          frappe.show_alert({
+            message: __("Invoice {0} is Submitted", [invoiceName]),
+            indicator: 'green'
+          }, 5);
+          
+          // Play success sound using Frappe's native API
+          frappe.utils.play_sound("submit");
+          
+          // Navigate back to invoice first, before any resets that might cause errors
+          setTimeout(() => {
             try {
-              // Use Frappe's built-in messaging
-              frappe.show_alert({
-                message: __("Invoice {0} is Submitted", [invoiceName]),
-                indicator: 'green'
-              }, 5);
+              // Call back_to_invoice first to ensure we return to the main screen
+              vm.back_to_invoice();
+              
+              // Then use setTimeout to do cleanup after UI is updated
+              setTimeout(() => {
+                // Avoid using eventBus for critical cleanup - use direct reloads/redirects instead
+                try {
+                  window.location.href = window.location.href.split('#')[0] + '#/';
+                } catch (err) {
+                  console.error("Error redirecting:", err);
+                }
+              }, 100);
             } catch (err) {
-              console.error("Error showing success message:", err);
-              // Fallback
-              alert(__("Invoice {0} is Submitted", [invoiceName]));
-            }
-            
-            // We've already shown success message above, so don't emit another one
-            // Play sound
-            frappe.utils.play_sound("submit");
-
-            // Clear invoice data and reset date - CRITICAL FIX: wrap in try-catch to handle event bus errors
-            try {
-              vm.eventBus.emit("clear_invoice");
-            } catch (err) {
-              console.error("Error emitting clear_invoice:", err);
-              // Fallback if event emission fails
+              console.error("Error returning to invoice:", err);
+              // Force reload if navigation fails
               window.location.reload();
             }
+          }, 300);
             
-            try {
-              vm.eventBus.emit("reset_posting_date");
-            } catch (err) {
-              console.error("Error emitting reset_posting_date:", err);
-            }
-            
-            // Add a small delay to ensure UI updates before back to invoice
-            setTimeout(() => {
-              try {
-                vm.back_to_invoice();
-              } catch (err) {
-                console.error("Error returning to invoice:", err);
-                // Force reload if back_to_invoice fails
-                window.location.reload();
-              }
-            }, 300);
-          } catch (error) {
-            console.error("Error handling success response", error);
-          }
+          // Previous setTimeout and back_to_invoice call was moved up
         }
       });
     },
@@ -1600,29 +1586,25 @@ export default {
         this.sales_person = "";
         this.addresses = [];
         
-        // Use safer try-catch for event emissions
-        try {
-          this.eventBus.emit('clear_invoice');
-        } catch (err) {
-          console.error("Error emitting clear_invoice for offline:", err);
-          // Fallback if event emission fails
-          setTimeout(() => window.location.reload(), 2000);
-          return true;
-        }
-        
-        try {
-          this.eventBus.emit('reset_posting_date');
-        } catch (err) {
-          console.error("Error emitting reset_posting_date for offline:", err);
-        }
-        
-        // Add delay for stability
+        // Navigate back first, then handle page reset
         setTimeout(() => {
           try {
+            // Return to invoice screen
             this.back_to_invoice();
+            
+            // Then use setTimeout to do cleanup after UI is updated
+            setTimeout(() => {
+              // Avoid using eventBus by reloading page after delay
+              try {
+                window.location.href = window.location.href.split('#')[0] + '#/';
+              } catch (err) {
+                console.error("Error redirecting after offline save:", err);
+                window.location.reload();
+              }
+            }, 100);
           } catch (err) {
             console.error("Error returning to invoice from offline:", err);
-            // Force reload if back_to_invoice fails
+            // Force reload if navigation fails
             window.location.reload();
           }
         }, 300);
