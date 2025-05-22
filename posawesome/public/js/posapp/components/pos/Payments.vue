@@ -626,8 +626,6 @@ export default {
   mixins: [format],
   data() {
     return {
-      // Safety for broken eventBus operations  
-      offlineInvoiceProcessed: false, // Flag to prevent double processing
       loading: false, // UI loading state
       pos_profile: "", // POS profile settings
       pos_settings: "", // POS settings
@@ -970,20 +968,9 @@ export default {
     },
     // Submit invoice to backend after all validations
     submit_invoice(print) {
-      // Prevent duplicate submissions
-      if (this.offlineInvoiceProcessed) {
-        console.log("Skipping duplicate invoice submission - already processed");
-        return;
-      }
-      
       // For return invoices, ensure payments are negative one last time
       if (this.invoice_doc.is_return) {
         this.ensureReturnPaymentsAreNegative();
-      }
-      
-      // Set flag to prevent double processing during offline mode
-      if (this.isOffline) {
-        this.offlineInvoiceProcessed = true;
       }
       let totalPayedAmount = 0;
       this.invoice_doc.payments.forEach((payment) => {
@@ -1068,45 +1055,35 @@ export default {
           vm.sales_person = "";
           vm.addresses = [];
           
-          // Now process successful payment
-          // IMPORTANT: Don't use eventBus for critical operations where we've seen errors
-          
-          // Store data globally
-          window.lastSubmittedInvoice = invoiceName;
-          window.lastSubmittedInvoiceDoc = r.message;
-          
-          // Show message directly using Frappe's native API
-          frappe.show_alert({
-            message: __("Invoice {0} is Submitted", [invoiceName]),
-            indicator: 'green'
-          }, 5);
-          
-          // Play success sound using Frappe's native API
-          frappe.utils.play_sound("submit");
-          
-          // Navigate back to invoice first, before any resets that might cause errors
-          setTimeout(() => {
-            try {
-              // Call back_to_invoice first to ensure we return to the main screen
-              vm.back_to_invoice();
-              
-              // Then use setTimeout to do cleanup after UI is updated
-              setTimeout(() => {
-                // Avoid using eventBus for critical cleanup - use direct reloads/redirects instead
-                try {
-                  window.location.href = window.location.href.split('#')[0] + '#/';
-                } catch (err) {
-                  console.error("Error redirecting:", err);
-                }
-              }, 100);
-            } catch (err) {
-              console.error("Error returning to invoice:", err);
-              // Force reload if navigation fails
-              window.location.reload();
-            }
-          }, 300);
+          // Now emit events with proper data
+          try {
+            // First set last invoice reference
+            vm.eventBus.emit("set_last_invoice", invoiceName);
             
-          // Previous setTimeout and back_to_invoice call was moved up
+            // Emit payment success event with invoice data
+            vm.eventBus.emit("payment_success", {
+              invoice_name: invoiceName,
+              invoice_doc: r.message
+            });
+            
+            // Show success message - Invoice component will also show message
+            vm.eventBus.emit("show_message", {
+              title: __("Invoice {0} is Submitted", [invoiceName]),
+              color: "success",
+            });
+            
+            // Play sound
+            frappe.utils.play_sound("submit");
+            
+            // Clear invoice data and reset date
+            vm.eventBus.emit("clear_invoice");
+            vm.eventBus.emit("reset_posting_date");
+            
+            // Finally return to invoice view
+            vm.back_to_invoice();
+          } catch (error) {
+            console.error("Error handling success response", error);
+          }
         }
       });
     },
@@ -1531,24 +1508,11 @@ export default {
     
     // Handle saving invoice to offline storage
     async saveInvoiceOffline() {
-      // Prevent duplicate saves
-      if (this.offlineInvoiceProcessed) {
-        console.log("Skipping duplicate offline invoice save - already processed");
-        return true;
-      }
-      
-      // Set flag to prevent double processing
-      this.offlineInvoiceProcessed = true;
-      
       if (!this.offlineStorage) {
-        try {
-          frappe.show_alert({
-            message: __('Cannot save offline: Offline storage not initialized'),
-            indicator: 'red'
-          }, 5);
-        } catch (err) {
-          alert(__('Cannot save offline: Offline storage not initialized'));
-        }
+        this.eventBus.emit('show_message', {
+          title: __('Cannot save offline: Offline storage not initialized'),
+          color: 'error'
+        });
         return false;
       }
       
@@ -1578,29 +1542,17 @@ export default {
         console.log('Queuing invoice for offline submission', invoiceData);
         const result = await this.offlineStorage.queuePendingInvoice(invoiceData);
         
-        // Store offline invoice success info
-        try {
-          const offlineInvoiceName = "Offline-" + new Date().getTime();
-          window.lastSubmittedInvoice = offlineInvoiceName;
-          window.lastSubmittedInvoiceDoc = { 
-            name: offlineInvoiceName,
-            is_offline: true 
-          };
-        } catch (err) {
-          console.error("Error storing offline payment data:", err);
-        }
+        // Emit payment success event for offline invoice
+        this.eventBus.emit('payment_success', {
+          invoice_name: "Offline-" + new Date().getTime(),
+          is_offline: true
+        });
         
-        // Show success message with direct frappe alert instead of event bus
-        try {
-          frappe.show_alert({
-            message: __('Invoice saved offline. It will be submitted when you reconnect.'),
-            indicator: 'green'
-          }, 5);
-        } catch (err) {
-          console.error("Error showing offline success message:", err);
-          // Fallback
-          alert(__('Invoice saved offline. It will be submitted when you reconnect.'));
-        }
+        // Show success message
+        this.eventBus.emit('show_message', {
+          title: __('Invoice saved offline. It will be submitted when you reconnect.'),
+          color: 'success'
+        });
         
         // Play success sound to give feedback
         frappe.utils.play_sound("submit");
@@ -1611,29 +1563,9 @@ export default {
         this.is_cashback = true;
         this.sales_person = "";
         this.addresses = [];
-        
-        // Navigate back first, then handle page reset
-        setTimeout(() => {
-          try {
-            // Return to invoice screen
-            this.back_to_invoice();
-            
-            // Then use setTimeout to do cleanup after UI is updated
-            setTimeout(() => {
-              // Avoid using eventBus by reloading page after delay
-              try {
-                window.location.href = window.location.href.split('#')[0] + '#/';
-              } catch (err) {
-                console.error("Error redirecting after offline save:", err);
-                window.location.reload();
-              }
-            }, 100);
-          } catch (err) {
-            console.error("Error returning to invoice from offline:", err);
-            // Force reload if navigation fails
-            window.location.reload();
-          }
-        }, 300);
+        this.eventBus.emit('clear_invoice');
+        this.eventBus.emit('reset_posting_date');
+        this.back_to_invoice();
         
         return true;
       } catch (error) {
@@ -1766,24 +1698,9 @@ export default {
   },
   // Lifecycle hook: mounted
   mounted() {
-    // Define safely wrapped event handlers
-    const safeEventHandler = (eventName, handlerFn) => {
-      try {
-        this.eventBus.on(eventName, (...args) => {
-          try {
-            handlerFn(...args);
-          } catch (err) {
-            console.error(`Error in ${eventName} handler:`, err);
-          }
-        });
-      } catch (err) {
-        console.error(`Error registering ${eventName} handler:`, err);
-      }
-    };
-    
     this.$nextTick(() => {
-      // Listen to various event bus events for POS actions using safe handler
-      safeEventHandler("send_invoice_doc_payment", (invoice_doc) => {
+      // Listen to various event bus events for POS actions
+      this.eventBus.on("send_invoice_doc_payment", (invoice_doc) => {
         try {
           // Validate invoice_doc to prevent errors
           if (!invoice_doc) {
@@ -1846,17 +1763,15 @@ export default {
           console.error('Error processing invoice document in payment component:', error);
         }
       });
-      safeEventHandler("register_pos_profile", (data) => {
+      this.eventBus.on("register_pos_profile", (data) => {
         this.pos_profile = data.pos_profile;
         this.get_mpesa_modes();
       });
-      
-      safeEventHandler("add_the_new_address", (data) => {
+      this.eventBus.on("add_the_new_address", (data) => {
         this.addresses.push(data);
         this.$forceUpdate();
       });
-      
-      safeEventHandler("update_invoice_type", (data) => {
+      this.eventBus.on("update_invoice_type", (data) => {
         this.invoiceType = data;
         if (this.invoice_doc && data !== "Order") {
           this.invoice_doc.posa_delivery_date = null;
@@ -1870,24 +1785,20 @@ export default {
           this.ensureReturnPaymentsAreNegative();
         }
       });
-      
-      safeEventHandler("update_customer", (customer) => {
+      this.eventBus.on("update_customer", (customer) => {
         if (this.customer !== customer) {
           this.customer_credit_dict = [];
           this.redeem_customer_credit = false;
           this.is_cashback = true;
         }
       });
-      
-      safeEventHandler("set_pos_settings", (data) => {
+      this.eventBus.on("set_pos_settings", (data) => {
         this.pos_settings = data;
       });
-      
-      safeEventHandler("set_customer_info_to_edit", (data) => {
+      this.eventBus.on("set_customer_info_to_edit", (data) => {
         this.customer_info = data;
       });
-      
-      safeEventHandler("set_mpesa_payment", (data) => {
+      this.eventBus.on("set_mpesa_payment", (data) => {
         this.set_mpesa_payment(data);
       });
     });
@@ -1900,39 +1811,15 @@ export default {
   },
   // Lifecycle hook: beforeUnmount
   beforeUnmount() {
-    // Remove all event listeners safely
-    try {
-      // Create an array of all event names we need to unsubscribe from
-      const events = [
-        "send_invoice_doc_payment",
-        "register_pos_profile", 
-        "add_the_new_address",
-        "update_invoice_type",
-        "update_customer",
-        "set_pos_settings",
-        "set_customer_info_to_edit",
-        "set_mpesa_payment"
-      ];
-      
-      // Unsubscribe from each event safely
-      events.forEach(eventName => {
-        try {
-          this.eventBus.off(eventName);
-        } catch (err) {
-          console.error(`Error unsubscribing from ${eventName}:`, err);
-        }
-      });
-    } catch (err) {
-      console.error("Error during event cleanup:", err);
-    }
+    // Remove all event listeners
+    this.eventBus.off("send_invoice_doc_payment");
+    this.eventBus.off("register_pos_profile");
+    this.eventBus.off("add_the_new_address");
+    this.eventBus.off("update_invoice_type");
     
     // Clean up network status subscription
     if (this.unsubscribeNetwork) {
-      try {
-        this.unsubscribeNetwork();
-      } catch (err) {
-        console.error("Error unsubscribing from network events:", err);
-      }
+      this.unsubscribeNetwork();
     }
   },
   // Lifecycle hook: unmounted

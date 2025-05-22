@@ -465,8 +465,6 @@ export default {
       return_doc: "",
       customer: "",
       customer_info: "",
-      paymentDialogVisible: false,
-      paymentCompletionInterval: null,
       customer_balance: 0,
       discount_amount: 0,
       additional_discount: 0,
@@ -515,8 +513,6 @@ export default {
       offlineDataStatus: null, // Status of offline data availability
       lastOfflineInvoiceId: null, // ID of last offline invoice
       unsubscribeNetwork: null, // Unsubscribe function for network detector
-      paymentDialogVisible: false,
-      paymentCompletionInterval: null,
     };
   },
 
@@ -4436,51 +4432,8 @@ export default {
     
     // Initialize offline storage reference
     this.initOfflineStorage();
-    
-    // CRITICAL FIX: Use window event polling instead of event bus for payment completion
-    // This avoids the mitt.js "i is not a function" error
-    const checkPaymentCompletion = () => {
-      try {
-        // Check if payment dialog is not visible and we have a successful invoice
-        if (!this.paymentDialogVisible && window.lastSubmittedInvoice) {
-          const invoiceName = window.lastSubmittedInvoice;
-          
-          // Show success message for completed payment
-          frappe.show_alert({
-            message: __("Invoice {0} is Submitted Successfully", [invoiceName]),
-            indicator: 'green'
-          }, 5);
-          
-          // Play success sound
-          frappe.utils.play_sound("submit");
-          
-          // Clear invoice and reset for new transaction
-          this.clear_invoice();
-          
-          // Reset posting date to today
-          this.posting_date = frappe.datetime.nowdate();
-          
-          // Clear the stored invoice reference
-          window.lastSubmittedInvoice = null;
-          window.lastSubmittedInvoiceDoc = null;
-          
-          console.log("Payment successfully processed, invoice cleared for new transaction");
-        }
-      } catch (error) {
-        console.error("Error in payment completion check:", error);
-      }
-    };
-    
-    // Start polling every 500ms to check for payment completion
-    this.paymentCompletionInterval = setInterval(checkPaymentCompletion, 500);
-    
-    // Track payment dialog visibility
-    this.eventBus.on("show_payment", (isVisible) => {
-      this.paymentDialogVisible = isVisible === "true";
-    });
   },
-  
-  // Lifecycle hook: beforeUnmount
+  // Cleanup event listeners before component is destroyed
   beforeUnmount() {
     // Existing cleanup
     this.eventBus.off("register_pos_profile");
@@ -4490,13 +4443,8 @@ export default {
     this.eventBus.off("clear_invoice");
     // Cleanup reset_posting_date listener
     this.eventBus.off("reset_posting_date");
-    // Cleanup show_payment listener
-    this.eventBus.off("show_payment");
     
-    // CRITICAL FIX: Clear payment completion interval
-    if (this.paymentCompletionInterval) {
-      clearInterval(this.paymentCompletionInterval);
-    }
+    // Clean up any additional resources if needed
     
     // Clean up network status subscription
     if (this.unsubscribeNetwork) {
@@ -4596,7 +4544,9 @@ export default {
     },
   },
 };
-// ... existing code ...
+
+// Store original lifecycle hooks if needed
+// This section is not needed as we're adding to the existing mounted and beforeUnmount methods
 </script>
 
 <style scoped>
