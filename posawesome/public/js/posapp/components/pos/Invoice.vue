@@ -4432,6 +4432,30 @@ export default {
     
     // Initialize offline storage reference
     this.initOfflineStorage();
+    
+    // Add listener for payment success event
+    this.eventBus.on("payment_success", (data) => {
+      try {
+        // Show success message
+        this.eventBus.emit("show_message", {
+          title: __("Invoice {0} is Submitted Successfully", [data.invoice_name || '']),
+          color: "success",
+        });
+        
+        // Play success sound
+        frappe.utils.play_sound("submit");
+        
+        // Clear invoice and reset for new transaction
+        this.clear_invoice();
+        
+        // Reset posting date to today
+        this.posting_date = frappe.datetime.nowdate();
+        
+        console.log("Payment successfully processed, invoice cleared for new transaction");
+      } catch (error) {
+        console.error("Error handling payment success:", error);
+      }
+    });
   },
   // Cleanup event listeners before component is destroyed
   beforeUnmount() {
@@ -4443,6 +4467,8 @@ export default {
     this.eventBus.off("clear_invoice");
     // Cleanup reset_posting_date listener
     this.eventBus.off("reset_posting_date");
+    // Cleanup payment_success listener
+    this.eventBus.off("payment_success");
     
     // Clean up any additional resources if needed
     

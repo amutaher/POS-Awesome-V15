@@ -1060,7 +1060,13 @@ export default {
             // First set last invoice reference
             vm.eventBus.emit("set_last_invoice", invoiceName);
             
-            // Then show success message
+            // Emit payment success event with invoice data
+            vm.eventBus.emit("payment_success", {
+              invoice_name: invoiceName,
+              invoice_doc: r.message
+            });
+            
+            // Show success message - Invoice component will also show message
             vm.eventBus.emit("show_message", {
               title: __("Invoice {0} is Submitted", [invoiceName]),
               color: "success",
@@ -1535,6 +1541,12 @@ export default {
         // Queue the invoice for submission when back online
         console.log('Queuing invoice for offline submission', invoiceData);
         const result = await this.offlineStorage.queuePendingInvoice(invoiceData);
+        
+        // Emit payment success event for offline invoice
+        this.eventBus.emit('payment_success', {
+          invoice_name: "Offline-" + new Date().getTime(),
+          is_offline: true
+        });
         
         // Show success message
         this.eventBus.emit('show_message', {
