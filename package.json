@@ -1,6 +1,8 @@
 {
   "scripts": {
-    "dev": "vite"
+    "dev": "vite",
+    "build": "node posawesome/www/pwa-build.js",
+    "preview": "vite preview"
   },
   "dependencies": {
     "lodash": "^4.17.21",

@@ -21,6 +21,11 @@ app_include_js = [
     "posawesome.bundle.js",
 ]
 
+# Service worker registration
+web_include_js = [
+    "/assets/posawesome/js/posawesome-service-worker.js"
+]
+
 # include js, css files in header of web template
 # web_include_css = "/assets/posawesome/css/posawesome.css"
 # web_include_js = "/assets/posawesome/js/posawesome.js"

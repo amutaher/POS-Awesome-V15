@@ -46,7 +46,8 @@
 31. Accept new payments from customers against existing invoices
 32. Payments Reconciliation
 33. Automatic cache versioning for PWA using Workbox
-34. A lot more bug fixes from the version 14
+34. Progressive Web App (PWA) with offline capabilities
+35. A lot more bug fixes from the version 14
 
 ### How to Install
 

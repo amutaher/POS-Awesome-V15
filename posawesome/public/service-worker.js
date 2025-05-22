@@ -1,6 +1,21 @@
-const CACHE_NAME = 'pos-awesome-cache-v3';
+// Import Workbox core modules
+importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
-// List of assets to cache for offline functionality
+// Initialize workbox
+workbox.setConfig({
+  debug: false
+});
+
+const { precacheAndRoute, cleanupOutdatedCaches } = workbox.precaching;
+
+// Use Workbox precaching to automatically handle cache versioning
+// self.__WB_MANIFEST is injected by the Workbox build process
+precacheAndRoute(self.__WB_MANIFEST || []);
+
+// Clean up any outdated caches from previous versions
+cleanupOutdatedCaches();
+
+// List of additional assets to cache for offline functionality
 const ASSETS_TO_CACHE = [
   '/app/posapp',
   '/assets/posawesome/js/posapp/posapp.js',
@@ -26,6 +41,20 @@ const ASSETS_TO_CACHE = [
   '/assets/posawesome/js/posapp/components/offline/SyncStatus.vue'
 ];
 
+// Cache additional assets
+self.addEventListener('install', (event) => {
+  console.log('[Service Worker] Install');
+  
+  event.waitUntil(
+    caches.open('pos-awesome-assets-cache')
+      .then((cache) => {
+        console.log('[Service Worker] Caching additional assets');
+        return cache.addAll(ASSETS_TO_CACHE);
+      })
+      .then(() => self.skipWaiting())
+  );
+});
+
 // API endpoints to cache for offline use
 const API_ROUTES_TO_CACHE = [
   '/api/method/posawesome.posawesome.api.posapp.get_items',
@@ -48,35 +77,10 @@ const API_ROUTES_TO_CACHE = [
   '/api/method/posawesome.posawesome.api.posapp.check_opening_shift'
 ];
 
-// Install event - caches assets for offline use
-self.addEventListener('install', (event) => {
-  console.log('[Service Worker] Install');
-  
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('[Service Worker] Caching app shell and assets');
-        return cache.addAll(ASSETS_TO_CACHE);
-      })
-      .then(() => self.skipWaiting())
-  );
-});
-
-// Activate event - cleans up old caches
+// Activate event - claim clients immediately
 self.addEventListener('activate', (event) => {
   console.log('[Service Worker] Activate');
-  
-  event.waitUntil(
-    caches.keys().then((keyList) => {
-      return Promise.all(keyList.map((key) => {
-        if (key !== CACHE_NAME) {
-          console.log('[Service Worker] Removing old cache', key);
-          return caches.delete(key);
-        }
-      }));
-    })
-    .then(() => self.clients.claim())
-  );
+  event.waitUntil(self.clients.claim());
 });
 
 // Network-first strategy for API calls with fallback to cache
@@ -88,7 +92,7 @@ async function networkFirstWithCacheFallback(request) {
     // If successful, clone and cache the response
     if (networkResponse && networkResponse.status === 200) {
       const responseToCache = networkResponse.clone();
-      const cache = await caches.open(CACHE_NAME);
+      const cache = await caches.open('pos-awesome-api-cache');
       await cache.put(request, responseToCache);
     }
     
@@ -142,7 +146,7 @@ async function cacheFirstWithNetworkFallback(request) {
     
     // Don't cache socket.io connections
     if (!request.url.includes('socket.io')) {
-      const cache = await caches.open(CACHE_NAME);
+      const cache = await caches.open('pos-awesome-assets-cache');
       await cache.put(request, responseToCache);
     }
     
@@ -236,7 +240,7 @@ self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'CACHE_DYNAMIC_URLS') {
     const urls = event.data.urls;
     if (urls && urls.length) {
-      caches.open(CACHE_NAME)
+      caches.open('pos-awesome-assets-cache')
         .then(cache => {
           console.log('[Service Worker] Caching dynamic URLs:', urls);
           return cache.addAll(urls);

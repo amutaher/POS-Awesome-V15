@@ -159,6 +159,40 @@ async processPendingInvoices() {
 }
 ```
 
+## Automatic Cache Versioning
+
+POS Awesome now uses Workbox for automatic cache versioning, eliminating the need for manual cache version changes:
+
+1. **How It Works**:
+   - During build time, the Workbox injects a manifest of all static assets with their hash values
+   - The service worker uses this manifest to precache assets
+   - When files change, their hashes change, automatically updating the cache
+   - Old caches are automatically cleaned up
+
+2. **Benefits**:
+   - No more manual version bumps in the service worker
+   - Clients always receive the latest assets
+   - Only changed files are re-cached, improving performance
+   - Cache management is handled automatically
+
+3. **Implementation Details**:
+   - Uses `workbox-precaching` for cache management
+   - Implements `precacheAndRoute` to handle caching strategy
+   - Uses `cleanupOutdatedCaches` to remove old cache versions
+   - Configured through Vite plugin for seamless integration with the build process
+
+4. **Example Code**:
+```javascript
+// In service-worker.js
+import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching';
+
+// Precache all build assets (hashed at build time)
+precacheAndRoute(self.__WB_MANIFEST);
+
+// Clean up any outdated caches from previous versions
+cleanupOutdatedCaches();
+```
+
 ## Resources
 
 - [MDN Web Docs: Progressive Web Apps](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps)
