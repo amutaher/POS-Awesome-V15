@@ -4,6 +4,7 @@ import eventBus from './bus';
 import * as components from 'vuetify/components'
 import * as directives from 'vuetify/directives'
 import Home from './Home.vue';
+import OfflineStorage from './services/offlineStorage.js';
 
 frappe.provide('frappe.PosApp');
 
@@ -13,8 +14,19 @@ frappe.PosApp.posapp = class {
         this.$parent = $(document);
         this.page = parent.page;
         this.make_body();
-
+        this.init_offline_storage();
     }
+
+    async init_offline_storage() {
+        try {
+            window.offlineStorage = new OfflineStorage('posAwesomeDB', 1);
+            await window.offlineStorage.init();
+            console.log('Global OfflineStorage initialized successfully');
+        } catch (error) {
+            console.error('Failed to initialize global OfflineStorage:', error);
+        }
+    }
+
     make_body() {
         this.$el = this.$parent.find('.main-section');
         const vuetify = createVuetify(

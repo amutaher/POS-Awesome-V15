@@ -4,15 +4,18 @@ const CACHE_NAME = 'pos-awesome-cache-v3';
 const ASSETS_TO_CACHE = [
   '/app/posapp',
   '/assets/posawesome/js/posapp/posapp.js',
+  '/assets/posawesome/js/posawesome.bundle.js',
   '/assets/posawesome/js/posapp/Home.vue',
+  '/assets/posawesome/js/posapp/format.js',
+  '/assets/posawesome/js/posapp/bus.js',
   '/assets/posawesome/js/posapp/components/Navbar.vue',
   '/assets/posawesome/js/posapp/components/pos/Pos.vue',
   '/assets/posawesome/js/posapp/components/pos/Invoice.vue',
   '/assets/posawesome/js/posapp/components/pos/ItemsSelector.vue',
   '/assets/posawesome/js/posapp/components/pos/Payments.vue',
   '/assets/posawesome/js/posapp/components/pos/Customer.vue',
-  '/assets/posawesome/js/posapp/components/pos/CustomerSelector.vue',
   '/assets/posawesome/js/posapp/components/pos/pos.png',
+  '/assets/posawesome/js/posapp/components/pos/placeholder-image.png',
   '/assets/posawesome/js/posapp/services/offlineStorage.js',
   '/assets/posawesome/js/posapp/services/networkDetector.js',
   '/assets/posawesome/icons/icon-72x72.png',
@@ -170,6 +173,22 @@ self.addEventListener('fetch', (event) => {
   const isApiRouteToCache = API_ROUTES_TO_CACHE.some(route => 
     event.request.url.includes(route)
   );
+  
+  // Intercept specific POS API GETs for dynamic JSON caching
+  if (event.request.url.match(/\/api\/method\/posawesome\.posawesome\.api\.posapp\.(get_items|get_customer_names)/)) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then(async cache => {
+        try {
+          const res = await fetch(event.request);
+          cache.put(event.request, res.clone());
+          return res;
+        } catch {
+          return cache.match(event.request);
+        }
+      })
+    );
+    return;
+  }
   
   if (isApiRouteToCache) {
     event.respondWith(networkFirstWithCacheFallback(event.request));

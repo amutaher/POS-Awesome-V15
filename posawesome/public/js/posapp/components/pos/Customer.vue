@@ -187,8 +187,16 @@ export default {
       var vm = this;
       if (this.customers.length > 0) return;
 
-      if (vm.pos_profile.posa_local_storage && localStorage.customer_storage) {
-        vm.customers = JSON.parse(localStorage.getItem('customer_storage'));
+      if (vm.pos_profile.posa_local_storage && window.offlineStorage) {
+        // Try to load from IndexedDB
+        window.offlineStorage.getAllData('customers').then(cached => {
+          if (cached && cached.length) {
+            vm.customers = cached;
+            vm.loading = false;
+          }
+        }).catch(err => {
+          console.error('Error loading customers from IndexedDB:', err);
+        });
       }
 
       this.loadingCustomers = true; // ? Start loading
@@ -201,9 +209,9 @@ export default {
           if (r.message) {
             vm.customers = r.message;
 
-            if (vm.pos_profile.posa_local_storage) {
-              localStorage.setItem('customer_storage', '');
-              localStorage.setItem('customer_storage', JSON.stringify(r.message));
+            if (vm.pos_profile.posa_local_storage && window.offlineStorage) {
+              // Cache customers in IndexedDB
+              window.offlineStorage.cacheCustomers(r.message);
             }
           }
           vm.loadingCustomers = false; // ? Stop loading

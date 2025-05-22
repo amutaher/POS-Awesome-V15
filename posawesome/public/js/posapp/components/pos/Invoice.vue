@@ -4204,21 +4204,11 @@ export default {
       // Use global offlineStorage instance if available
       if (window.offlineStorage) {
         this.offlineStorage = window.offlineStorage;
-      } else {
-        // Otherwise create a new instance
-        try {
-          const OfflineStorage = (await import('../../services/offlineStorage.js')).default;
-          this.offlineStorage = new OfflineStorage('posAwesomeDB', 1);
-          await this.offlineStorage.init();
-        } catch (error) {
-          console.error('Failed to initialize offline storage:', error);
-        }
-      }
-      
-      // Check if offline data is available
-      if (this.offlineStorage) {
+        // Check if offline data is available
         this.offlineDataStatus = await this.offlineStorage.checkOfflineDataAvailability();
         console.log('Offline data status:', this.offlineDataStatus);
+      } else {
+        console.error('Global offlineStorage is not available');
       }
     },
     
