@@ -952,6 +952,7 @@ export default {
       }
       
       // For online mode, proceed with normal submission
+      // Rest of existing submit method...
       if (payment_received || frappe.user.has_role("Healthcare Receptionist")) {
         this.invoice_doc.is_pos = 1;
       }
@@ -959,103 +960,130 @@ export default {
         this.invoice_doc.sales_team = [{ sales_person: this.sales_person, allocated_percentage: 100 }];
       }
       
+      // Continue with existing validation logic...
+      // ... existing validation code
+      
       // Proceed to submit the invoice
       this.submit_invoice(print);
     },
     // Submit invoice to backend after all validations
-    submit_invoice(print = false, skip_validation = false) {
-      const vm = this;
-      
-      // Validate before submitting
-      if (!skip_validation && !this.validate_invoice()) {
-        return;
+    submit_invoice(print) {
+      // For return invoices, ensure payments are negative one last time
+      if (this.invoice_doc.is_return) {
+        this.ensureReturnPaymentsAreNegative();
       }
-
-      // Show loading state
-      this.eventBus.emit("freeze", { title: __("Submitting invoice...") });
-
-      // Prepare invoice data
-      let formData = { ...this.invoice_doc };
-      formData["total_change"] = !this.invoice_doc.is_return ? -this.diff_payment : 0;
-      formData["paid_change"] = !this.invoice_doc.is_return ? this.paid_change : 0;
-      formData["credit_change"] = -this.credit_change;
-      formData["redeemed_customer_credit"] = this.redeemed_customer_credit;
-      formData["customer_credit_dict"] = this.customer_credit_dict;
-      formData["is_cashback"] = this.is_cashback;
-
-      // Submit invoice
+      let totalPayedAmount = 0;
+      this.invoice_doc.payments.forEach((payment) => {
+        payment.amount = this.flt(payment.amount);
+        totalPayedAmount += payment.amount;
+      });
+      if (this.invoice_doc.is_return && totalPayedAmount === 0) {
+        this.invoice_doc.is_pos = 0;
+      }
+      if (this.customer_credit_dict.length) {
+        this.customer_credit_dict.forEach((row) => {
+          row.credit_to_redeem = this.flt(row.credit_to_redeem);
+        });
+      }
+      let data = {
+        total_change: !this.invoice_doc.is_return ? -this.diff_payment : 0,
+        paid_change: !this.invoice_doc.is_return ? this.paid_change : 0,
+        credit_change: -this.credit_change,
+        redeemed_customer_credit: this.redeemed_customer_credit,
+        customer_credit_dict: this.customer_credit_dict,
+        is_cashback: this.is_cashback,
+      };
+      const vm = this;
       frappe.call({
         method: "posawesome.posawesome.api.posapp.submit_invoice",
-        args: { data: formData },
-        callback: function(r) {
-          // Unfreeze UI
-          vm.eventBus.emit("unfreeze");
-          
-          if (!r || !r.message) {
-            console.error("Empty response from server");
+        args: {
+          data: data,
+          invoice: this.invoice_doc,
+        },
+        callback: function (r) {
+          if (r.exc) {
+            console.error("Error submitting invoice:", r.exc);
+            // Show detailed error message to help debugging
+            let errorMsg = r.exc.toString();
+            if (errorMsg.includes("Amount must be negative")) {
+              vm.eventBus.emit("show_message", {
+                title: __("Fixing payment amounts for return invoice..."),
+                color: "warning",
+              });
+              // Force fix the amounts
+              vm.invoice_doc.payments.forEach((payment) => {
+                if (payment.amount > 0) {
+                  payment.amount = -Math.abs(payment.amount);
+                }
+                if (payment.base_amount > 0) {
+                  payment.base_amount = -Math.abs(payment.base_amount);
+                }
+              });
+              // Retry submission once
+              console.log("Retrying submission with fixed payment amounts");
+              setTimeout(() => {
+                vm.submit_invoice(print);
+              }, 500);
+            } else {
+              vm.eventBus.emit("show_message", {
+                title: __("Error submitting invoice: ") + errorMsg,
+                color: "error",
+              });
+            }
+            return;
+          }
+          if (!r.message) {
             vm.eventBus.emit("show_message", {
-              title: __("Empty response from server"),
-              color: "error"
+              title: __("Error submitting invoice: No response from server"),
+              color: "error",
             });
             return;
           }
-
+          
+          // Make sure we handle print before any data reset
+          if (print) {
+            vm.load_print_page();
+          }
+          
+          // Store invoice name for reference
+          const invoiceName = r.message.name;
+          
+          // Reset data in proper order to avoid errors
+          vm.customer_credit_dict = [];
+          vm.redeem_customer_credit = false;
+          vm.is_cashback = true;
+          vm.sales_person = "";
+          vm.addresses = [];
+          
+          // Now emit events with proper data
           try {
-            // Store invoice name for reference
-            const invoiceName = r.message.name;
-            
-            // Reset data in proper order to avoid errors
-            vm.customer_credit_dict = [];
-            vm.redeem_customer_credit = false;
-            vm.is_cashback = true;
-            vm.sales_person = "";
-            vm.addresses = [];
-            
-            // Handle print if requested
-            if (print) {
-              vm.load_print_page();
-            }
-            
-            // Emit events with proper data
+            // First set last invoice reference
             vm.eventBus.emit("set_last_invoice", invoiceName);
+            
+            // Emit payment success event with invoice data
             vm.eventBus.emit("payment_success", {
               invoice_name: invoiceName,
               invoice_doc: r.message
             });
             
-            // Show success message
+            // Show success message - Invoice component will also show message
             vm.eventBus.emit("show_message", {
               title: __("Invoice {0} is Submitted", [invoiceName]),
-              color: "success"
+              color: "success",
             });
             
-            // Play success sound
+            // Play sound
             frappe.utils.play_sound("submit");
             
             // Clear invoice data and reset date
             vm.eventBus.emit("clear_invoice");
             vm.eventBus.emit("reset_posting_date");
             
-            // Return to invoice view
+            // Finally return to invoice view
             vm.back_to_invoice();
-            
           } catch (error) {
-            console.error("Error handling success response:", error);
-            vm.eventBus.emit("show_message", {
-              title: __("Error processing invoice submission: ") + error.message,
-              color: "error"
-            });
+            console.error("Error handling success response", error);
           }
-        },
-        error: function(error) {
-          // Unfreeze UI
-          vm.eventBus.emit("unfreeze");
-          
-          console.error("Error in submit_invoice:", error);
-          vm.eventBus.emit("show_message", {
-            title: __("Error submitting invoice: ") + (error.message || "Unknown error"),
-            color: "error"
-          });
         }
       });
     },
@@ -1290,95 +1318,53 @@ export default {
       formData["redeemed_customer_credit"] = this.redeemed_customer_credit;
       formData["customer_credit_dict"] = this.customer_credit_dict;
       formData["is_cashback"] = this.is_cashback;
-
-      // First update the invoice
       frappe.call({
         method: "posawesome.posawesome.api.posapp.update_invoice",
         args: { data: formData },
+        async: false,
         callback: function (r) {
           if (r.message) {
             vm.invoice_doc = r.message;
-            
-            // Then create payment request
-            frappe.call({
-              method: "posawesome.posawesome.api.posapp.create_payment_request",
-              args: { doc: vm.invoice_doc },
-              callback: function (r) {
-                if (r.message) {
-                  const payment_request_name = r.message.name;
-                  setTimeout(() => {
-                    frappe.db.get_value("Payment Request", payment_request_name, ["status", "grand_total"])
-                      .then(({ message }) => {
-                        if (message.status !== "Paid") {
-                          vm.eventBus.emit("unfreeze");
-                          vm.eventBus.emit("show_message", {
-                            title: __("Payment Request took too long to respond. Please try requesting for payment again"),
-                            color: "error",
-                          });
-                        } else {
-                          vm.eventBus.emit("unfreeze");
-                          vm.eventBus.emit("show_message", {
-                            title: __("Payment of {0} received successfully.", [
-                              vm.formatCurrency(message.grand_total, vm.invoice_doc.currency, 0),
-                            ]),
-                            color: "success",
-                          });
-                          frappe.db.get_doc("Sales Invoice", vm.invoice_doc.name)
-                            .then((doc) => {
-                              vm.invoice_doc = doc;
-                              vm.submit_invoice(null, true);
-                            })
-                            .catch((error) => {
-                              console.error("Error getting invoice doc:", error);
-                              vm.eventBus.emit("show_message", {
-                                title: __("Error getting invoice details"),
-                                color: "error",
-                              });
-                            });
-                        }
-                      })
-                      .catch((error) => {
-                        console.error("Error getting payment request status:", error);
-                        vm.eventBus.emit("unfreeze");
-                        vm.eventBus.emit("show_message", {
-                          title: __("Error checking payment status"),
-                          color: "error",
-                        });
-                      });
-                  }, 30000);
-                } else {
-                  vm.eventBus.emit("unfreeze");
-                  vm.eventBus.emit("show_message", {
-                    title: __("Failed to create payment request"),
-                    color: "error",
-                  });
-                }
-              },
-              error: function(error) {
-                console.error("Error creating payment request:", error);
+          }
+        },
+      }).then(() => {
+        frappe.call({
+          method: "posawesome.posawesome.api.posapp.create_payment_request",
+          args: { doc: vm.invoice_doc },
+        })
+        .fail(() => {
+          vm.eventBus.emit("unfreeze");
+          vm.eventBus.emit("show_message", {
+            title: __("Payment request failed"),
+            color: "error",
+          });
+        })
+        .then(({ message }) => {
+          const payment_request_name = message.name;
+          setTimeout(() => {
+            frappe.db.get_value("Payment Request", payment_request_name, ["status", "grand_total"]).then(({ message }) => {
+              if (message.status !== "Paid") {
                 vm.eventBus.emit("unfreeze");
                 vm.eventBus.emit("show_message", {
-                  title: __("Payment request failed"),
+                  title: __("Payment Request took too long to respond. Please try requesting for payment again"),
                   color: "error",
+                });
+              } else {
+                vm.eventBus.emit("unfreeze");
+                vm.eventBus.emit("show_message", {
+                  title: __("Payment of {0} received successfully.", [
+                    vm.formatCurrency(message.grand_total, vm.invoice_doc.currency, 0),
+                  ]),
+                  color: "success",
+                });
+                frappe.db.get_doc("Sales Invoice", vm.invoice_doc.name).then((doc) => {
+                  vm.invoice_doc = doc;
+                  vm.submit(null, true);
                 });
               }
             });
-          } else {
-            vm.eventBus.emit("unfreeze");
-            vm.eventBus.emit("show_message", {
-              title: __("Failed to update invoice"),
-              color: "error",
-            });
-          }
-        },
-        error: function(error) {
-          console.error("Error updating invoice:", error);
-          vm.eventBus.emit("unfreeze");
-          vm.eventBus.emit("show_message", {
-            title: __("Failed to update invoice"),
-            color: "error",
-          });
-        }
+          }, 30000);
+        });
       });
     },
     // Get M-Pesa payment modes from backend

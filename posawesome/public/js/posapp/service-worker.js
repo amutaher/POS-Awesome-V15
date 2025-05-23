@@ -5,19 +5,20 @@
  */
 
 // Cache names
-const STATIC_CACHE_NAME = 'posawesome-static-v1';
+const STATIC_CACHE_NAME = 'pos-awesome-static-v1';
 const DYNAMIC_CACHE_NAME = 'pos-awesome-dynamic-v1';
 const API_CACHE_NAME = 'pos-awesome-api-v1';
 
 // Resources to cache immediately on install
 const STATIC_RESOURCES = [
-  '/assets/posawesome/js/posapp/',
-  '/assets/posawesome/css/',
-  '/assets/posawesome/icons/',
-  '/assets/posawesome/manifest.json',
-  '/assets/posawesome/node_modules/vuetify/dist/vuetify.min.css',
-  'https://cdn.jsdelivr.net/npm/@mdi/font@6.x/css/materialdesignicons.min.css',
-  'https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900'
+  '/posawesome/public/js/posapp/bundle.js',
+  '/posawesome/public/css/posawesome.css',
+  '/assets/css/frappe-web.min.css',
+  '/assets/js/frappe-web.min.js',
+  '/posawesome/point-of-sale',
+  '/posawesome/public/js/posapp/offline.html',
+  '/posawesome/public/images/pos-loading.gif',
+  '/posawesome/public/images/pos-offline.svg',
 ];
 
 // Default offline page
@@ -50,32 +51,13 @@ self.addEventListener('install', event => {
   
   event.waitUntil(
     caches.open(STATIC_CACHE_NAME)
-      .then((cache) => {
+      .then(cache => {
         console.log('[Service Worker] Caching static resources');
-        return Promise.allSettled(
-          STATIC_RESOURCES.map(url => {
-            return fetch(url, { 
-              credentials: 'same-origin',
-              cache: 'no-store'
-            })
-              .then(response => {
-                if (!response.ok) {
-                  throw new Error(`Failed to fetch ${url}: ${response.status}`);
-                }
-                return cache.put(url, response);
-              })
-              .catch(error => {
-                console.warn(`[Service Worker] Failed to cache ${url}:`, error);
-                return Promise.resolve();
-              });
-          })
-        );
-      })
-      .then(() => {
-        console.log('[Service Worker] Static resources cached successfully');
-      })
-      .catch(error => {
-        console.error('[Service Worker] Failed to cache static resources:', error);
+        return cache.addAll(STATIC_RESOURCES).catch(error => {
+          console.error('[Service Worker] Failed to cache some static resources:', error);
+          // Continue anyway - partial caching is better than none
+          return cache.addAll([OFFLINE_PAGE]);
+        });
       })
   );
 });
@@ -87,6 +69,7 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   console.log('[Service Worker] Activating...');
   
+  // Delete old caches
   event.waitUntil(
     caches.keys()
       .then(cacheNames => {
@@ -108,6 +91,7 @@ self.addEventListener('activate', event => {
         return self.clients.claim();
       })
       .then(() => {
+        // Set up network status checking
         startNetworkStatusChecking();
         return self.skipWaiting();
       })
@@ -197,35 +181,30 @@ self.addEventListener('message', event => {
 });
 
 /**
- * Cache-first strategy for static resources
+ * Cache-first strategy with network fallback
  * Used for static resources that rarely change
  */
 async function cacheFirstStrategy(request) {
   try {
     const cachedResponse = await caches.match(request);
+    
     if (cachedResponse) {
       return cachedResponse;
     }
-
+    
+    // Not in cache, get from network
     const networkResponse = await fetch(request);
-    if (!networkResponse.ok) {
-      throw new Error(`Network response was not ok: ${networkResponse.status}`);
+    
+    // Cache the response if valid
+    if (networkResponse && networkResponse.status === 200) {
+      const cache = await caches.open(STATIC_CACHE_NAME);
+      cache.put(request, networkResponse.clone());
     }
-
-    const cache = await caches.open(STATIC_CACHE_NAME);
-    await cache.put(request, networkResponse.clone());
+    
     return networkResponse;
   } catch (error) {
-    console.warn(`[Service Worker] Cache-first strategy failed for ${request.url}:`, error);
-    // Return a fallback response if available
-    const fallbackResponse = await caches.match('/assets/posawesome/offline.html');
-    return fallbackResponse || new Response('Offline content not available', {
-      status: 503,
-      statusText: 'Service Unavailable',
-      headers: new Headers({
-        'Content-Type': 'text/plain'
-      })
-    });
+    console.error('[Service Worker] Cache first strategy failed:', error);
+    return caches.match(OFFLINE_PAGE);
   }
 }
 
@@ -235,12 +214,12 @@ async function cacheFirstStrategy(request) {
  */
 async function networkFirstStrategy(request) {
   try {
-    // Try network first if online
+    // Try to get from network first
     if (isOnline) {
       try {
         const networkResponse = await fetch(request.clone());
         
-        // Cache successful responses
+        // Cache the successful response
         if (networkResponse && networkResponse.status === 200) {
           const cache = await caches.open(API_CACHE_NAME);
           cache.put(request, networkResponse.clone());
@@ -249,21 +228,21 @@ async function networkFirstStrategy(request) {
         return networkResponse;
       } catch (error) {
         console.log('[Service Worker] Network request failed, trying cache:', error);
+        // Network request failed, try cache
       }
     }
     
-    // Try cache if offline or network failed
+    // Try to get from cache if offline or network failed
     const cachedResponse = await caches.match(request);
     
     if (cachedResponse) {
       return cachedResponse;
     }
     
-    // If not in cache and offline, return offline response
+    // If not in cache and network failed, return offline response
     return new Response(
       JSON.stringify({ 
-        error: 'You are offline and this data is not cached',
-        timestamp: Date.now()
+        error: 'You are offline and this data is not cached' 
       }),
       { 
         status: 503,
@@ -273,10 +252,7 @@ async function networkFirstStrategy(request) {
   } catch (error) {
     console.error('[Service Worker] Network first strategy failed:', error);
     return new Response(
-      JSON.stringify({ 
-        error: 'Service unavailable',
-        timestamp: Date.now()
-      }),
+      JSON.stringify({ error: 'Service unavailable' }),
       { 
         status: 503,
         headers: { 'Content-Type': 'application/json' }
