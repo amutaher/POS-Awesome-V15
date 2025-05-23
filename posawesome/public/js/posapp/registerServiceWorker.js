@@ -1,138 +1,266 @@
 /**
  * Service Worker Registration for POS Awesome
+ * Handles PWA functionality and background sync
+ */
+
+// Configuration
+const SW_CONFIG = {
+  // Service worker registration options
+  registerOptions: {
+    scope: '/'
+  },
+  // Retry settings for failed registrations
+  retryAttempts: 3,
+  retryDelay: 2000, // 2 seconds
+  // Periodic sync registration options (if supported)
+  periodicSync: {
+    minInterval: 60 * 60 * 1000, // 1 hour in milliseconds
+    tag: 'pos-awesome-periodic-sync'
+  }
+};
+
+/**
+ * Register the service worker with reliability and error handling
+ * @returns {Promise<ServiceWorkerRegistration|null>} The service worker registration if successful
  */
 export async function registerServiceWorker() {
-  if ('serviceWorker' in navigator) {
+  // Check if service workers are supported
+  if (!('serviceWorker' in navigator)) {
+    console.warn('[POS Awesome] Service workers are not supported in this browser. Offline functionality will be limited.');
+    return Promise.resolve(null);
+  }
+
+  // Check if we're in a secure context (required for service workers)
+  if (!window.isSecureContext) {
+    console.warn('[POS Awesome] Service worker registration failed: Not in a secure context. Offline functionality will be limited.');
+    return Promise.resolve(null);
+  }
+
+  // Keep track of registration attempts
+  let attemptCount = 0;
+
+  // Define registration function with retries
+  const attemptRegistration = async () => {
     try {
-      // Check if we're running on production or development
-      const isProduction = window.location.hostname !== 'localhost' && 
-                          window.location.hostname !== '127.0.0.1';
+      attemptCount++;
+      console.log(`[POS Awesome] Attempting service worker registration (attempt ${attemptCount}/${SW_CONFIG.retryAttempts})`);
       
-      // Get the app base URL (needed to correctly reference the service worker)
-      const baseUrl = window.frappe ? window.frappe.urllib.get_base_url() : '';
+      // Get the service worker URL (adjust path if needed)
+      const swUrl = '/posawesome/public/js/posapp/service-worker.js';
       
-      // Define possible service worker paths to try
-      const possiblePaths = [
-        '/service-worker.js',
-        '/posawesome/public/service-worker.js',
-        '/assets/posawesome/public/service-worker.js',
-        '/sw.js' // Original path as fallback
-      ];
+      // Register the service worker
+      const registration = await navigator.serviceWorker.register(swUrl, SW_CONFIG.registerOptions);
       
-      // Only try to register service worker in production environment
-      if (isProduction) {
-        let serviceWorkerUrl = null;
-        
-        // Try to find the service worker file by testing each path
-        for (const path of possiblePaths) {
-          try {
-            console.log(`Checking for service worker at: ${baseUrl}${path}`);
-            const swResponse = await fetch(`${baseUrl}${path}`, {
-              method: 'HEAD', // Use HEAD request to be efficient
-              cache: 'no-cache' // Avoid cached responses
-            });
-            
-            if (swResponse.ok) {
-              console.log(`Found service worker at: ${baseUrl}${path}`);
-              serviceWorkerUrl = `${baseUrl}${path}`;
-              break;
-            }
-          } catch (err) {
-            console.log(`Service worker not found at: ${baseUrl}${path}`);
-            // Continue trying other paths
-          }
-        }
-        
-        // If no service worker found, log and return
-        if (!serviceWorkerUrl) {
-          console.warn('No service worker found at any of the expected locations. Skipping registration.');
-          return null;
-        }
-        
-        // If file exists, proceed with registration
-        console.log(`Registering service worker from: ${serviceWorkerUrl}`);
-        const registration = await navigator.serviceWorker.register(serviceWorkerUrl, {
-          scope: '/'
+      console.log('[POS Awesome] Service worker registration successful:', registration.scope);
+      
+      // If registration is successful, try to set up periodic sync if available
+      try {
+        await setupBackgroundSync(registration);
+      } catch (syncError) {
+        console.warn('[POS Awesome] Background sync setup failed:', syncError);
+      }
+      
+      // Monitor for controller changes (service worker activation)
+      if (!navigator.serviceWorker.controller) {
+        await waitForControllerChange();
+        console.log('[POS Awesome] Service worker now controlling page');
+      }
+      
+      return registration;
+    } catch (error) {
+      console.error('[POS Awesome] Service worker registration failed:', error);
+      
+      // Retry registration if we haven't exceeded retry attempts
+      if (attemptCount < SW_CONFIG.retryAttempts) {
+        console.log(`[POS Awesome] Retrying service worker registration in ${SW_CONFIG.retryDelay/1000} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, SW_CONFIG.retryDelay));
+        return attemptRegistration();
+      }
+      
+      throw error;
+    }
+  };
+
+  return attemptRegistration().catch(error => {
+    // Final fallback - notify user and resolve with null instead of rejecting
+    console.error('[POS Awesome] Service worker registration ultimately failed:', error);
+    window.dispatchEvent(new CustomEvent('pos-awesome-sw-registration-failed', { 
+      detail: { error: error.message } 
+    }));
+    return null;
+  });
+}
+
+/**
+ * Wait for the service worker to take control of the page
+ * @returns {Promise<void>} Promise that resolves when controller changes
+ */
+function waitForControllerChange() {
+  return new Promise(resolve => {
+    // If there's already a controller, resolve immediately
+    if (navigator.serviceWorker.controller) {
+      return resolve();
+    }
+    
+    // Otherwise wait for the controllerchange event
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      resolve();
+    }, { once: true });
+    
+    // Add a timeout to prevent hanging indefinitely
+    setTimeout(resolve, 10000);
+  });
+}
+
+/**
+ * Setup background sync registration
+ * @param {ServiceWorkerRegistration} registration The service worker registration
+ * @returns {Promise<void>} Promise that resolves when setup is complete
+ */
+async function setupBackgroundSync(registration) {
+  // First try to register persistent background sync if available
+  if ('periodicSync' in registration) {
+    try {
+      // Check if we have permission for periodic background sync
+      const status = await navigator.permissions.query({
+        name: 'periodic-background-sync',
+      });
+      
+      if (status.state === 'granted') {
+        // Register periodic sync
+        await registration.periodicSync.register(SW_CONFIG.periodicSync.tag, {
+          minInterval: SW_CONFIG.periodicSync.minInterval
         });
-        
-        console.log('Service worker registered successfully:', registration.scope);
-        
-        // Set up manual sync button for browsers without Background Sync
-        setupManualSync();
-        
-        // Listen for controlling service worker changes
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-          console.log('Service Worker controller changed');
-        });
-        
-        // Listen for messages from service worker
-        navigator.serviceWorker.addEventListener('message', (event) => {
-          handleServiceWorkerMessage(event.data);
-        });
-        
-        return registration;
+        console.log('[POS Awesome] Periodic background sync registered');
       } else {
-        console.log('Development environment detected. Skipping service worker registration.');
-        return null;
+        console.log('[POS Awesome] Periodic background sync not permitted');
       }
     } catch (error) {
-      console.error('Service worker registration failed:', error);
-      // Don't let service worker failures block the app from working
-      return null;
+      console.warn('[POS Awesome] Periodic sync registration failed:', error);
     }
-  } else {
-    console.warn('Service workers are not supported in this browser');
-    return null;
   }
-}
-
-/**
- * Handle service worker messages
- * @param {Object} data Message data
- */
-function handleServiceWorkerMessage(data) {
-  if (!data) return;
   
-  switch (data.type) {
-    case 'SYNC_STARTED':
-      console.log('Sync started by service worker');
-      // Dispatch event for UI components to show sync status
-      window.dispatchEvent(new CustomEvent('pos-awesome-sync-started'));
-      break;
-      
-    case 'SYNC_COMPLETE_NOTIFICATION':
-      console.log('Sync completed:', data.message);
-      // Dispatch event for UI components to update sync status
-      window.dispatchEvent(new CustomEvent('pos-awesome-sync-complete', { 
-        detail: { message: data.message }
-      }));
-      break;
-      
-    default:
-      console.log('Unknown message from service worker:', data);
+  // Register one-time background sync (more widely supported)
+  if ('sync' in registration) {
+    try {
+      await registration.sync.register('pos-awesome-sync');
+      console.log('[POS Awesome] Background sync registered');
+    } catch (error) {
+      console.warn('[POS Awesome] Background sync registration failed:', error);
+    }
   }
 }
 
 /**
- * Set up manual sync button for browsers without Background Sync
+ * Manually trigger a sync event via the service worker
+ * @param {string} syncTag The tag to identify the sync operation
+ * @returns {Promise<boolean>} Whether the sync was successfully triggered
  */
-function setupManualSync() {
-  // Check if Background Sync is supported
-  if (navigator.serviceWorker && 'SyncManager' in window) {
-    console.log('Background Sync is supported');
+export async function triggerServiceWorkerSync(syncTag = 'pos-awesome-sync') {
+  if (!navigator.serviceWorker || !navigator.serviceWorker.controller) {
+    console.warn('[POS Awesome] Cannot trigger sync: No active service worker');
+    return false;
+  }
+  
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    
+    // Try background sync API first
+    if ('sync' in registration) {
+      await registration.sync.register(syncTag);
+      console.log(`[POS Awesome] Background sync '${syncTag}' triggered`);
+      return true;
+    }
+    
+    // Fallback: Send message to service worker
+    navigator.serviceWorker.controller.postMessage({
+      type: 'TRIGGER_SYNC',
+      tag: syncTag,
+      timestamp: Date.now()
+    });
+    console.log(`[POS Awesome] Sync message sent to service worker`);
+    return true;
+  } catch (error) {
+    console.error('[POS Awesome] Failed to trigger service worker sync:', error);
+    return false;
+  }
+}
+
+/**
+ * Check if the app is installed as PWA
+ * @returns {boolean} True if the app is installed
+ */
+export function isRunningAsPWA() {
+  // Check various indicators that we might be running as a PWA
+  return (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.matchMedia('(display-mode: minimal-ui)').matches ||
+    window.navigator.standalone === true // iOS Safari
+  );
+}
+
+/**
+ * Check if background sync is supported in this browser
+ * @returns {Promise<boolean>} True if background sync is supported
+ */
+export async function isBackgroundSyncSupported() {
+  if (!('serviceWorker' in navigator)) {
+    return false;
+  }
+  
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    return 'sync' in registration;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Initialize service worker message handling
+ * Allows communicating with the service worker
+ */
+export function initServiceWorkerMessaging() {
+  // Skip if service workers aren't supported
+  if (!('serviceWorker' in navigator)) {
     return;
   }
   
-  console.log('Background Sync not supported, enabling manual sync fallback');
-  
-  // Dispatch event to notify UI components to show manual sync button
-  window.dispatchEvent(new CustomEvent('pos-awesome-enable-manual-sync'));
-  
-  // Set up interval for periodic sync checking
-  window.setInterval(() => {
-    if (navigator.onLine && window.offlineStorage) {
-      console.log('Attempting automatic sync via fallback mechanism');
-      window.offlineStorage.processPendingInvoices();
+  // Set up navigator.serviceWorker message event listener
+  navigator.serviceWorker.addEventListener('message', event => {
+    const message = event.data;
+    
+    if (!message || !message.type) {
+      return;
     }
-  }, 60000); // Check every minute
+    
+    console.log('[POS Awesome] Received message from service worker:', message.type);
+    
+    // Handle different message types
+    switch (message.type) {
+      case 'SYNC_NEEDED':
+        window.dispatchEvent(new CustomEvent('pos-awesome-sync-needed', { 
+          detail: { timestamp: message.timestamp, reason: message.reason } 
+        }));
+        break;
+        
+      case 'SYNC_COMPLETED':
+        window.dispatchEvent(new CustomEvent('pos-awesome-sync-complete', { 
+          detail: { timestamp: message.timestamp, results: message.results } 
+        }));
+        break;
+        
+      case 'SYNC_FAILED':
+        window.dispatchEvent(new CustomEvent('pos-awesome-sync-failed', { 
+          detail: { timestamp: message.timestamp, error: message.error } 
+        }));
+        break;
+        
+      case 'NETWORK_STATUS':
+        window.dispatchEvent(new CustomEvent('pos-awesome-sw-network-status', { 
+          detail: { isOnline: message.isOnline, timestamp: message.timestamp } 
+        }));
+        break;
+    }
+  });
 } 

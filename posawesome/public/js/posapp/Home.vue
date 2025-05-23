@@ -125,7 +125,13 @@ import POS from './components/pos/Pos.vue';
 import Payments from './components/payments/Pay.vue';
 import BootstrapDialog from './components/bootstrap/BootstrapDialog.vue';
 import DBMigrationDialog from './components/bootstrap/DBMigrationDialog.vue';
-import { registerServiceWorker } from './registerServiceWorker';
+import { 
+  registerServiceWorker, 
+  initServiceWorkerMessaging, 
+  triggerServiceWorkerSync,
+  isRunningAsPWA,
+  isBackgroundSyncSupported
+} from './registerServiceWorker';
 import OfflineStorage from './services/offlineStorage';
 
 export default {
@@ -145,7 +151,12 @@ export default {
       bootstrapComplete: false,
       bootstrapSkipped: false,
       lastNetworkEvent: null,
-      networkCheckInterval: null
+      networkCheckInterval: null,
+      serviceWorkerRegistration: null,
+      appInitialized: false,
+      serviceWorkerInitialized: false,
+      isPWA: false,
+      hasBackgroundSync: false
     };
   },
   components: {
@@ -292,23 +303,108 @@ export default {
     },
     
     /**
-     * Attempt to sync with server if online
+     * Initialize service worker
      */
-    attemptSync() {
-      if (!this.offlineStorage || !navigator.onLine || this.syncingInProgress) {
-        return;
+    async initializeServiceWorker() {
+      try {
+        console.log('[Home] Initializing service worker...');
+        this.serviceWorkerRegistration = await registerServiceWorker();
+        
+        if (this.serviceWorkerRegistration) {
+          console.log('[Home] Service worker registered successfully');
+          
+          // Initialize service worker messaging
+          initServiceWorkerMessaging();
+          this.serviceWorkerInitialized = true;
+          
+          // Add service worker specific event listeners
+          this.setupServiceWorkerEventListeners();
+          
+          // Check if we're running as PWA and have background sync support
+          this.isPWA = isRunningAsPWA();
+          this.hasBackgroundSync = await isBackgroundSyncSupported();
+          
+          if (this.isPWA) {
+            console.log('[Home] Running as PWA');
+          }
+          
+          if (!this.hasBackgroundSync) {
+            console.log('[Home] Background sync not supported, enabling manual sync');
+            this.enableManualSync();
+          }
+        } else {
+          console.warn('[Home] Service worker registration failed');
+        }
+      } catch (error) {
+        console.error('[Home] Error initializing service worker:', error);
       }
-      
-      console.log('[Home] Attempting automatic sync');
-      this.offlineStorage.triggerSync()
-        .then(result => {
-          console.log('[Home] Auto-sync initiated:', result);
-        })
-        .catch(error => {
-          console.error('[Home] Auto-sync error:', error);
-        });
     },
     
+    /**
+     * Set up service worker event listeners
+     */
+    setupServiceWorkerEventListeners() {
+      // Listen for sync needed events from the service worker
+      window.addEventListener('pos-awesome-sync-needed', this.handleSyncNeeded);
+      
+      // Listen for service worker sync completed events
+      window.addEventListener('pos-awesome-sync-complete', this.handleSyncCompleted);
+      
+      // Listen for service worker sync failed events
+      window.addEventListener('pos-awesome-sync-failed', this.handleSyncFailed);
+      
+      // Listen for service worker network status events
+      window.addEventListener('pos-awesome-sw-network-status', this.handleServiceWorkerNetworkStatus);
+      
+      // Listen for service worker registration failure
+      window.addEventListener('pos-awesome-sw-registration-failed', this.handleServiceWorkerRegistrationFailed);
+    },
+    
+    /**
+     * Handle service worker registration failure
+     */
+    handleServiceWorkerRegistrationFailed(event) {
+      console.warn('[Home] Service worker registration failed:', event.detail.error);
+      // Even if service worker fails, enable manual sync as fallback
+      this.enableManualSync();
+    },
+    
+    /**
+     * Handle sync needed event from service worker
+     */
+    handleSyncNeeded(event) {
+      console.log('[Home] Sync needed:', event.detail);
+      if (this.offlineStorage && navigator.onLine && !this.syncingInProgress) {
+        this.attemptSync();
+      }
+    },
+    
+    /**
+     * Handle sync failure event from service worker
+     */
+    handleSyncFailed(event) {
+      console.warn('[Home] Sync failed:', event.detail);
+      this.syncingInProgress = false;
+      this.syncSnackbar = true;
+      this.syncMessage = `Sync failed: ${event.detail.error || 'Unknown error'}`;
+    },
+    
+    /**
+     * Handle network status events from service worker
+     */
+    handleServiceWorkerNetworkStatus(event) {
+      const { isOnline, timestamp } = event.detail;
+      console.log(`[Home] Service worker network status: ${isOnline ? 'Online' : 'Offline'}`);
+      
+      // Only update if service worker status differs from our current status
+      if (isOnline !== navigator.onLine) {
+        this.checkNetworkStatus();
+      }
+    },
+    
+    /**
+     * Set up PWA installation prompts
+     */
     setupPWAInstall() {
       // Listen for the beforeinstallprompt event
       window.addEventListener('beforeinstallprompt', (e) => {
@@ -325,16 +421,19 @@ export default {
         // Hide the app-provided install promotion
         this.pwaInstallPrompt = false;
         this.deferredPrompt = null;
-        console.log('PWA was installed');
+        console.log('[Home] PWA was installed');
       });
     },
     
+    /**
+     * Trigger PWA installation
+     */
     installPWA() {
       // Hide the app provided install promotion
       this.pwaInstallPrompt = false;
       
       if (!this.deferredPrompt) {
-        console.log('No installation prompt available');
+        console.log('[Home] No installation prompt available');
         return;
       }
       
@@ -344,9 +443,9 @@ export default {
       // Wait for the user to respond to the prompt
       this.deferredPrompt.userChoice.then((choiceResult) => {
         if (choiceResult.outcome === 'accepted') {
-          console.log('User accepted the install prompt');
+          console.log('[Home] User accepted the install prompt');
         } else {
-          console.log('User dismissed the install prompt');
+          console.log('[Home] User dismissed the install prompt');
         }
         this.deferredPrompt = null;
       });
@@ -354,10 +453,7 @@ export default {
     
     async setupOfflineSupport() {
       try {
-        // Register service worker
-        await registerServiceWorker();
-        
-        // Initialize offline storage
+        // Initialize offline storage first
         this.offlineStorage = new OfflineStorage();
         
         // Make it available globally for other components
@@ -366,10 +462,45 @@ export default {
         // Wait for the database to be ready
         await this.offlineStorage.ready;
         
-        console.log('Offline support initialized successfully');
+        console.log('[Home] Offline storage initialized successfully');
         
         // Set up network checking
         this.setupNetworkChecking();
+        
+        // Initialize the service worker AFTER storage is ready
+        await this.initializeServiceWorker();
+        
+        // Handle any HANDLE_SYNC messages from service worker
+        if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+          navigator.serviceWorker.addEventListener('message', (event) => {
+            if (event.data && event.data.type === 'HANDLE_SYNC') {
+              console.log('[Home] Received HANDLE_SYNC message from service worker');
+              if (this.offlineStorage && !this.syncingInProgress) {
+                // Process pending invoices and then notify the service worker when done
+                this.offlineStorage.processPendingInvoices()
+                  .then(results => {
+                    if (navigator.serviceWorker.controller) {
+                      navigator.serviceWorker.controller.postMessage({
+                        type: 'SYNC_COMPLETED',
+                        timestamp: Date.now(),
+                        results: results
+                      });
+                    }
+                  })
+                  .catch(error => {
+                    console.error('[Home] Error processing pending invoices:', error);
+                    if (navigator.serviceWorker.controller) {
+                      navigator.serviceWorker.controller.postMessage({
+                        type: 'SYNC_FAILED',
+                        timestamp: Date.now(),
+                        error: error.message
+                      });
+                    }
+                  });
+              }
+            }
+          });
+        }
         
         // Check if bootstrap is required
         await this.checkBootstrapRequired();
@@ -383,8 +514,20 @@ export default {
         
         // Tell components bootstrap is available
         this.eventBus.emit('bootstrap_dialog_ready');
+        
+        // App is now fully initialized
+        this.appInitialized = true;
+        
+        // If we're online, attempt an initial sync
+        if (navigator.onLine) {
+          setTimeout(() => {
+            this.attemptSync();
+          }, 5000); // Wait 5 seconds after initialization
+        }
       } catch (error) {
-        console.error('Error setting up offline support:', error);
+        console.error('[Home] Error setting up offline support:', error);
+        // Enable manual sync as fallback
+        this.enableManualSync();
       }
     },
     
@@ -441,6 +584,74 @@ export default {
     
     enableManualSync() {
       this.showManualSync = true;
+    },
+    
+    /**
+     * Attempt to sync with server if online
+     */
+    attemptSync() {
+      if (!this.offlineStorage || !navigator.onLine || this.syncingInProgress) {
+        return;
+      }
+      
+      console.log('[Home] Attempting automatic sync');
+      this.syncingInProgress = true;
+      
+      // First try to use service worker sync if available
+      if (this.serviceWorkerInitialized && this.serviceWorkerRegistration) {
+        triggerServiceWorkerSync()
+          .then(triggered => {
+            if (!triggered) {
+              // Fallback to direct sync
+              return this.offlineStorage.manualSync();
+            }
+            // Sync was triggered via service worker
+            return { success: true, serviceWorker: true };
+          })
+          .then(result => {
+            console.log('[Home] Auto-sync initiated:', result);
+            if (!result.serviceWorker) {
+              // If we did a direct sync without service worker, we can update UI immediately
+              this.syncingInProgress = false;
+              if (result.success) {
+                this.syncSnackbar = true;
+                this.syncMessage = 'Sync completed successfully';
+              } else {
+                this.syncSnackbar = true;
+                this.syncMessage = `Sync failed: ${result.error || result.reason || 'Unknown error'}`;
+              }
+            }
+            // If we used service worker, the sync is still in progress
+            // and will be handled by service worker message events
+          })
+          .catch(error => {
+            console.error('[Home] Auto-sync error:', error);
+            this.syncingInProgress = false;
+            this.syncSnackbar = true;
+            this.syncMessage = `Sync failed: ${error.message || 'Unknown error'}`;
+          });
+      } else {
+        // No service worker, use direct sync
+        this.offlineStorage.manualSync()
+          .then(result => {
+            console.log('[Home] Manual sync result:', result);
+            this.syncingInProgress = false;
+            
+            if (result.success) {
+              this.syncSnackbar = true;
+              this.syncMessage = 'Sync completed successfully';
+            } else {
+              this.syncSnackbar = true;
+              this.syncMessage = `Sync failed: ${result.error || result.reason || 'Unknown error'}`;
+            }
+          })
+          .catch(error => {
+            console.error('[Home] Manual sync error:', error);
+            this.syncingInProgress = false;
+            this.syncSnackbar = true;
+            this.syncMessage = `Sync failed: ${error.message || 'Unknown error'}`;
+          });
+      }
     },
     
     async manualSync() {
@@ -579,6 +790,7 @@ export default {
       
       this.setupPWAInstall();
       
+      // Initialize offline storage and service worker
       await this.setupOfflineSupport();
       
       // Setup event listeners for bootstrap dialog
@@ -606,6 +818,14 @@ export default {
     window.removeEventListener('pos-awesome-sync-started', this.handleSyncStarted);
     window.removeEventListener('pos-awesome-sync-complete', this.handleSyncCompleted);
     window.removeEventListener('pos-awesome-enable-manual-sync', this.enableManualSync);
+    
+    // Remove service worker event listeners if they were set up
+    if (this.serviceWorkerInitialized) {
+      window.removeEventListener('pos-awesome-sync-needed', this.handleSyncNeeded);
+      window.removeEventListener('pos-awesome-sync-failed', this.handleSyncFailed);
+      window.removeEventListener('pos-awesome-sw-network-status', this.handleServiceWorkerNetworkStatus);
+      window.removeEventListener('pos-awesome-sw-registration-failed', this.handleServiceWorkerRegistrationFailed);
+    }
     
     // Remove connection quality listener if available
     if (navigator.connection) {
