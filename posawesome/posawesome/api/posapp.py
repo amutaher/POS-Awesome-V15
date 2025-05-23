@@ -635,158 +635,251 @@ def update_invoice(data):
 
 @frappe.whitelist()
 def submit_invoice(invoice, data):
-    # Check for idempotency key in header
+    """
+    Submit a sales invoice with idempotency protection
+    
+    Args:
+        invoice (str): JSON string of the invoice data
+        data (str): JSON string of additional data
+        
+    Returns:
+        dict: Result with invoice name and status
+    """
+    # Get the idempotency key from the header
     idempotency_key = frappe.request.headers.get('Idempotency-Key')
+    
+    # Add logging for debugging
+    frappe.logger().info(f"Submit invoice request received with idempotency key: {idempotency_key}")
+    
     if idempotency_key:
         # Check if we've already processed this request
         processed_key = frappe.cache().get_value(f"posa_idempotent_{idempotency_key}")
         if processed_key:
             # Return the cached result with 200 OK
+            frappe.logger().info(f"Idempotent request detected: {idempotency_key}, returning cached result")
             return processed_key
     
-    data = json.loads(data)
-    invoice = json.loads(invoice)
-    invoice_doc = frappe.get_doc("Sales Invoice", invoice.get("name"))
-    invoice_doc.update(invoice)
-    if invoice.get("posa_delivery_date"):
-        invoice_doc.update_stock = 0
-    mop_cash_list = [
-        i.mode_of_payment
-        for i in invoice_doc.payments
-        if "cash" in i.mode_of_payment.lower() and i.type == "Cash"
-    ]
-    if len(mop_cash_list) > 0:
-        cash_account = get_bank_cash_account(mop_cash_list[0], invoice_doc.company)
-    else:
-        cash_account = {
-            "account": frappe.get_value(
-                "Company", invoice_doc.company, "default_cash_account"
-            )
-        }
-
-    # Update remarks with items details
-    items = []
-    for item in invoice_doc.items:
-        if item.item_name and item.rate and item.qty:
-            total = item.rate * item.qty
-            items.append(f"{item.item_name} - Rate: {item.rate}, Qty: {item.qty}, Amount: {total}")
-    
-    # Add the grand total at the end of remarks
-    grand_total = f"\nGrand Total: {invoice_doc.grand_total}"
-    items.append(grand_total)
-    
-    invoice_doc.remarks = "\n".join(items)
-
-    # creating advance payment
-    if data.get("credit_change"):
-        advance_payment_entry = frappe.get_doc(
-            {
-                "doctype": "Payment Entry",
-                "mode_of_payment": "Cash",
-                "paid_to": cash_account["account"],
-                "payment_type": "Receive",
-                "party_type": "Customer",
-                "party": invoice_doc.get("customer"),
-                "paid_amount": invoice_doc.get("credit_change"),
-                "received_amount": invoice_doc.get("credit_change"),
-                "company": invoice_doc.get("company"),
-            }
-        )
-
-        advance_payment_entry.flags.ignore_permissions = True
-        frappe.flags.ignore_account_permission = True
-        advance_payment_entry.save()
-        advance_payment_entry.submit()
-
-    # calculating cash
-    total_cash = 0
-    if data.get("redeemed_customer_credit"):
-        total_cash = invoice_doc.total - float(data.get("redeemed_customer_credit"))
-
-    is_payment_entry = 0
-    if data.get("redeemed_customer_credit"):
-        for row in data.get("customer_credit_dict"):
-            if row["type"] == "Advance" and row["credit_to_redeem"]:
-                advance = frappe.get_doc("Payment Entry", row["credit_origin"])
-
-                advance_payment = {
-                    "reference_type": "Payment Entry",
-                    "reference_name": advance.name,
-                    "remarks": advance.remarks,
-                    "advance_amount": advance.unallocated_amount,
-                    "allocated_amount": row["credit_to_redeem"],
+    try:
+        # Parse the inputs
+        invoice_data = json.loads(invoice)
+        additional_data = json.loads(data)
+        
+        # Check for invoice name
+        if invoice_data.get("name"):
+            # Check if the invoice already exists
+            invoice_check = check_invoice_exists(invoice_data.get("name"))
+            if invoice_check and invoice_check.get("exists"):
+                # Invoice already exists, return its details
+                result = {
+                    "name": invoice_data.get("name"),
+                    "status": invoice_check.get("status"),
+                    "docstatus": invoice_check.get("docstatus"),
+                    "already_exists": True
                 }
-
-                invoice_doc.append("advances", advance_payment)
-                invoice_doc.is_pos = 0
-                is_payment_entry = 1
-
-    payments = invoice_doc.payments
-
-    # if frappe.get_value("POS Profile", invoice_doc.pos_profile, "posa_auto_set_batch"):
-    #     set_batch_nos(invoice_doc, "warehouse", throw=True)
-    set_batch_nos_for_bundels(invoice_doc, "warehouse", throw=True)
-
-    invoice_doc.flags.ignore_permissions = True
-    frappe.flags.ignore_account_permission = True
-    invoice_doc.posa_is_printed = 1
-    invoice_doc.save()
-
-    if data.get("due_date"):
-        frappe.db.set_value(
-            "Sales Invoice",
-            invoice_doc.name,
-            "due_date",
-            data.get("due_date"),
-            update_modified=False,
-        )
-
-    if frappe.get_value(
-        "POS Profile",
-        invoice_doc.pos_profile,
-        "posa_allow_submissions_in_background_job",
-    ):
-        invoices_list = frappe.get_all(
-            "Sales Invoice",
-            filters={
-                "posa_pos_opening_shift": invoice_doc.posa_pos_opening_shift,
-                "docstatus": 0,
-                "posa_is_printed": 1,
-            },
-        )
-        for invoice in invoices_list:
-            enqueue(
-                method=submit_in_background_job,
-                queue="short",
-                timeout=1000,
-                is_async=True,
-                kwargs={
-                    "invoice": invoice.name,
-                    "data": data,
-                    "is_payment_entry": is_payment_entry,
-                    "total_cash": total_cash,
-                    "cash_account": cash_account,
-                    "payments": payments,
-                    "idempotency_key": idempotency_key,
-                },
-            )
-    else:
-        invoice_doc.submit()
-        redeeming_customer_credit(
-            invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
-        )
-
-    result = {"name": invoice_doc.name, "status": invoice_doc.docstatus}
-    
-    # Store the result for idempotency
-    if idempotency_key:
-        frappe.cache().set_value(
-            f"posa_idempotent_{idempotency_key}", 
-            result,
-            expires_in_sec=86400  # 24 hours
+                
+                # Cache the result for future idempotent requests
+                if idempotency_key:
+                    frappe.cache().set_value(
+                        f"posa_idempotent_{idempotency_key}", 
+                        result,
+                        expires_in_sec=86400  # 24 hours
+                    )
+                
+                return result
+        
+        # Log tempId and metadata for traceability
+        temp_id = invoice_data.get("tempId")
+        metadata = additional_data.get("metadata", {})
+        frappe.logger().info(
+            f"Processing invoice submission: tempId={temp_id}, " +
+            f"deviceId={metadata.get('deviceId')}, envelopeId={metadata.get('envelopeId')}"
         )
         
-    return result
+        # Process the invoice
+        invoice_doc = frappe.get_doc("Sales Invoice", invoice_data.get("name")) if invoice_data.get("name") else frappe.new_doc("Sales Invoice")
+        invoice_doc.update(invoice_data)
+        
+        if invoice_data.get("posa_delivery_date"):
+            invoice_doc.update_stock = 0
+            
+        # Rest of the existing code remains the same
+        mop_cash_list = [
+            i.mode_of_payment
+            for i in invoice_doc.payments
+            if "cash" in i.mode_of_payment.lower() and i.type == "Cash"
+        ]
+        if len(mop_cash_list) > 0:
+            cash_account = get_bank_cash_account(mop_cash_list[0], invoice_doc.company)
+        else:
+            cash_account = {
+                "account": frappe.get_value(
+                    "Company", invoice_doc.company, "default_cash_account"
+                )
+            }
+
+        # Update remarks with items details
+        items = []
+        for item in invoice_doc.items:
+            if item.item_name and item.rate and item.qty:
+                total = item.rate * item.qty
+                items.append(f"{item.item_name} - Rate: {item.rate}, Qty: {item.qty}, Amount: {total}")
+        
+        # Add the grand total at the end of remarks
+        grand_total = f"\nGrand Total: {invoice_doc.grand_total}"
+        items.append(grand_total)
+        
+        # Add device and request metadata to remarks for traceability
+        if metadata:
+            device_info = f"\nDevice: {metadata.get('deviceId', 'unknown')}"
+            envelope_info = f"\nEnvelope: {metadata.get('envelopeId', 'unknown')}"
+            temp_id_info = f"\nTempID: {metadata.get('tempId', 'unknown')}"
+            items.append(device_info)
+            items.append(envelope_info)
+            items.append(temp_id_info)
+        
+        invoice_doc.remarks = "\n".join(items)
+
+        # The rest of the method continues as before
+        is_payment_entry = 0
+        total_cash = 0
+        
+        # creating advance payment
+        if additional_data.get("credit_change"):
+            advance_payment_entry = frappe.get_doc(
+                {
+                    "doctype": "Payment Entry",
+                    "mode_of_payment": "Cash",
+                    "paid_to": cash_account["account"],
+                    "payment_type": "Receive",
+                    "party_type": "Customer",
+                    "party": invoice_doc.get("customer"),
+                    "paid_amount": invoice_doc.get("credit_change"),
+                    "received_amount": invoice_doc.get("credit_change"),
+                    "company": invoice_doc.get("company"),
+                }
+            )
+
+            advance_payment_entry.flags.ignore_permissions = True
+            frappe.flags.ignore_account_permission = True
+            advance_payment_entry.save()
+            advance_payment_entry.submit()
+
+        # calculating cash
+        if additional_data.get("redeemed_customer_credit"):
+            total_cash = invoice_doc.total - float(additional_data.get("redeemed_customer_credit"))
+
+        if additional_data.get("redeemed_customer_credit"):
+            for row in additional_data.get("customer_credit_dict"):
+                if row["type"] == "Advance" and row["credit_to_redeem"]:
+                    advance = frappe.get_doc("Payment Entry", row["credit_origin"])
+
+                    advance_payment = {
+                        "reference_type": "Payment Entry",
+                        "reference_name": advance.name,
+                        "remarks": advance.remarks,
+                        "advance_amount": advance.unallocated_amount,
+                        "allocated_amount": row["credit_to_redeem"],
+                    }
+
+                    invoice_doc.append("advances", advance_payment)
+                    invoice_doc.is_pos = 0
+                    is_payment_entry = 1
+
+        payments = invoice_doc.payments
+
+        # if frappe.get_value("POS Profile", invoice_doc.pos_profile, "posa_auto_set_batch"):
+        #     set_batch_nos(invoice_doc, "warehouse", throw=True)
+        set_batch_nos_for_bundels(invoice_doc, "warehouse", throw=True)
+
+        invoice_doc.flags.ignore_permissions = True
+        frappe.flags.ignore_account_permission = True
+        invoice_doc.posa_is_printed = 1
+        invoice_doc.save()
+
+        if additional_data.get("due_date"):
+            frappe.db.set_value(
+                "Sales Invoice",
+                invoice_doc.name,
+                "due_date",
+                additional_data.get("due_date"),
+                update_modified=False,
+            )
+
+        # Background submission or immediate submission
+        if frappe.get_value(
+            "POS Profile",
+            invoice_doc.pos_profile,
+            "posa_allow_submissions_in_background_job",
+        ):
+            invoices_list = frappe.get_all(
+                "Sales Invoice",
+                filters={
+                    "posa_pos_opening_shift": invoice_doc.posa_pos_opening_shift,
+                    "docstatus": 0,
+                    "posa_is_printed": 1,
+                },
+            )
+            for invoice in invoices_list:
+                enqueue(
+                    method=submit_in_background_job,
+                    queue="short",
+                    timeout=1000,
+                    is_async=True,
+                    kwargs={
+                        "invoice": invoice.name,
+                        "data": additional_data,
+                        "is_payment_entry": is_payment_entry,
+                        "total_cash": total_cash,
+                        "cash_account": cash_account,
+                        "payments": payments,
+                        "idempotency_key": idempotency_key,
+                    },
+                )
+        else:
+            try:
+                invoice_doc.submit()
+                redeeming_customer_credit(
+                    invoice_doc, additional_data, is_payment_entry, total_cash, cash_account, payments
+                )
+            except Exception as e:
+                frappe.logger().error(f"Error submitting invoice {invoice_doc.name}: {str(e)}")
+                if idempotency_key:
+                    # Cache the error result for idempotency
+                    error_result = {
+                        "name": invoice_doc.name, 
+                        "status": "error",
+                        "error": str(e)
+                    }
+                    frappe.cache().set_value(
+                        f"posa_idempotent_{idempotency_key}", 
+                        error_result,
+                        expires_in_sec=86400  # 24 hours
+                    )
+                raise e
+
+        result = {"name": invoice_doc.name, "status": invoice_doc.docstatus}
+        
+        # Store the result for idempotency
+        if idempotency_key:
+            frappe.cache().set_value(
+                f"posa_idempotent_{idempotency_key}", 
+                result,
+                expires_in_sec=86400  # 24 hours
+            )
+            
+        return result
+        
+    except Exception as e:
+        frappe.logger().error(f"Error in submit_invoice: {str(e)}")
+        if idempotency_key:
+            # Cache the error result
+            error_result = {"status": "error", "error": str(e)}
+            frappe.cache().set_value(
+                f"posa_idempotent_{idempotency_key}", 
+                error_result,
+                expires_in_sec=86400  # 24 hours
+            )
+        raise e
 
 
 def set_batch_nos_for_bundels(doc, warehouse_field, throw=False):
@@ -910,6 +1003,15 @@ def redeeming_customer_credit(
 
 
 def submit_in_background_job(kwargs):
+    """
+    Process an invoice submission in a background job with idempotency support
+    
+    Args:
+        kwargs (dict): Dictionary of parameters for the job
+    
+    Returns:
+        dict: Result with invoice information
+    """
     invoice = kwargs.get("invoice")
     invoice_doc = kwargs.get("invoice_doc")
     data = kwargs.get("data")
@@ -924,40 +1026,88 @@ def submit_in_background_job(kwargs):
         processed_result = frappe.cache().get_value(f"posa_idempotent_{idempotency_key}")
         if processed_result:
             # Already processed, do nothing
+            frappe.logger().info(f"Background job: idempotent request detected: {idempotency_key}")
             return processed_result
 
-    invoice_doc = frappe.get_doc("Sales Invoice", invoice)
-    
-    # Update remarks with items details for background job
-    items = []
-    for item in invoice_doc.items:
-        if item.item_name and item.rate and item.qty:
-            total = item.rate * item.qty
-            items.append(f"{item.item_name} - Rate: {item.rate}, Qty: {item.qty}, Amount: {total}")
-    
-    # Add the grand total at the end of remarks
-    grand_total = f"\nGrand Total: {invoice_doc.grand_total}"
-    items.append(grand_total)
-    
-    invoice_doc.remarks = "\n".join(items)
-    invoice_doc.save()
-    
-    invoice_doc.submit()
-    redeeming_customer_credit(
-        invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
-    )
-    
-    result = {"name": invoice_doc.name, "status": invoice_doc.docstatus}
-    
-    # Store the result for idempotency
-    if idempotency_key:
-        frappe.cache().set_value(
-            f"posa_idempotent_{idempotency_key}",
-            result,
-            expires_in_sec=86400  # 24 hours
+    try:
+        # Get the invoice document
+        invoice_doc = frappe.get_doc("Sales Invoice", invoice)
+        
+        # Check if the invoice is already submitted
+        if invoice_doc.docstatus == 1:
+            result = {"name": invoice_doc.name, "status": invoice_doc.docstatus, "already_submitted": True}
+            # Cache for idempotency
+            if idempotency_key:
+                frappe.cache().set_value(
+                    f"posa_idempotent_{idempotency_key}",
+                    result,
+                    expires_in_sec=86400  # 24 hours
+                )
+            frappe.logger().info(f"Background job: invoice {invoice} was already submitted")
+            return result
+        
+        # Continue with submission process
+        frappe.logger().info(f"Background job: processing submission for invoice {invoice}")
+        
+        # Update remarks with items details for background job
+        items = []
+        for item in invoice_doc.items:
+            if item.item_name and item.rate and item.qty:
+                total = item.rate * item.qty
+                items.append(f"{item.item_name} - Rate: {item.rate}, Qty: {item.qty}, Amount: {total}")
+        
+        # Add the grand total at the end of remarks
+        grand_total = f"\nGrand Total: {invoice_doc.grand_total}"
+        items.append(grand_total)
+        
+        # Add background job metadata
+        background_info = f"\nProcessed by: Background Job"
+        idempotency_info = f"\nIdempotency Key: {idempotency_key or 'none'}"
+        items.append(background_info)
+        items.append(idempotency_info)
+        
+        invoice_doc.remarks = "\n".join(items)
+        invoice_doc.save()
+        
+        # Submit the invoice
+        invoice_doc.submit()
+        redeeming_customer_credit(
+            invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
         )
         
-    return result
+        result = {"name": invoice_doc.name, "status": invoice_doc.docstatus, "processed_by": "background_job"}
+        
+        # Store the result for idempotency
+        if idempotency_key:
+            frappe.cache().set_value(
+                f"posa_idempotent_{idempotency_key}",
+                result,
+                expires_in_sec=86400  # 24 hours
+            )
+        
+        frappe.logger().info(f"Background job: successfully submitted invoice {invoice}")
+        return result
+        
+    except Exception as e:
+        error_msg = f"Background job: error submitting invoice {invoice}: {str(e)}"
+        frappe.logger().error(error_msg)
+        
+        # Store the error for idempotency
+        if idempotency_key:
+            error_result = {
+                "name": invoice, 
+                "status": "error", 
+                "error": str(e), 
+                "processed_by": "background_job"
+            }
+            frappe.cache().set_value(
+                f"posa_idempotent_{idempotency_key}",
+                error_result,
+                expires_in_sec=86400  # 24 hours
+            )
+        
+        # Raise the exception to be handled by the queuing system
+        raise
 
 
 @frappe.whitelist()
@@ -2310,24 +2460,43 @@ def check_invoice_exists(invoice_name):
         invoice_name (str): The name of the invoice to check
         
     Returns:
-        bool: True if the invoice exists, False otherwise
+        dict: Dictionary with existence status and additional info
     """
     try:
         # First check if this is a valid invoice name format
         if not invoice_name or not isinstance(invoice_name, str):
             return False
             
-        # Check if the invoice exists using count to be more efficient
-        invoice_count = frappe.db.count('Sales Invoice', {'name': invoice_name})
+        # Check if the invoice exists (including drafts)
+        invoice_data = frappe.db.get_value(
+            'Sales Invoice', 
+            {'name': invoice_name}, 
+            ['name', 'docstatus', 'modified', 'status', 'outstanding_amount'],
+            as_dict=1
+        )
         
-        # Log the check for debugging
-        frappe.logger().debug(f"Invoice existence check for {invoice_name}: {'Found' if invoice_count > 0 else 'Not Found'}")
-        
-        return invoice_count > 0
+        if invoice_data:
+            # Log the check for debugging
+            frappe.logger().debug(
+                f"Invoice check for {invoice_name}: Found - Status: {invoice_data.status}, " +
+                f"DocStatus: {invoice_data.docstatus}, Modified: {invoice_data.modified}"
+            )
+            
+            # Return more detailed information to help client make better decisions
+            return {
+                "exists": True,
+                "docstatus": invoice_data.docstatus,
+                "status": invoice_data.status,
+                "modified": invoice_data.modified,
+                "outstanding_amount": invoice_data.outstanding_amount
+            }
+        else:
+            frappe.logger().debug(f"Invoice check for {invoice_name}: Not Found")
+            return {"exists": False}
     except Exception as e:
         # Log any errors but don't crash
         frappe.logger().error(f"Error checking invoice existence: {str(e)}")
-        return False
+        return {"exists": False, "error": str(e)}
 
 @frappe.whitelist()
 def get_app_info() -> Dict[str, List[Dict[str, str]]]:

@@ -5,11 +5,79 @@
 // Remove external uuid dependency
 // import { v4 as uuidv4 } from 'uuid';
 
-// Simple UUID generator function
+// Enhanced UUID generator with timestamp and device fingerprint
 function generateUUID() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
+  // Get timestamp in milliseconds and convert to hex
+  const timestamp = new Date().getTime().toString(16).padStart(12, '0');
+  
+  // Create device fingerprint based on available browser data
+  let deviceData = [
+    navigator.userAgent,
+    navigator.language,
+    screen.colorDepth,
+    screen.width + 'x' + screen.height,
+    new Date().getTimezoneOffset()
+  ].join('');
+  
+  // Generate a hash from the device data
+  let deviceHash = 0;
+  for (let i = 0; i < deviceData.length; i++) {
+    deviceHash = ((deviceHash << 5) - deviceHash) + deviceData.charCodeAt(i);
+    deviceHash = deviceHash & deviceHash; // Convert to 32bit integer
+  }
+  deviceHash = Math.abs(deviceHash).toString(16).slice(0, 8);
+  
+  // Random component (8 chars)
+  const randomPart = Math.random().toString(16).slice(2, 10);
+  
+  // Combine all parts: timestamp-devicehash-random
+  return `${timestamp}-${deviceHash}-${randomPart}`;
+}
+
+// Get a persisted device ID that stays consistent across sessions
+async function getDeviceId() {
+  const DB_NAME = 'posAwesomeDeviceId';
+  const STORE_NAME = 'deviceId';
+  const KEY = 'deviceIdKey';
+  
+  return new Promise((resolve) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    
+    request.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      db.createObjectStore(STORE_NAME);
+    };
+    
+    request.onsuccess = (event) => {
+      const db = event.target.result;
+      const transaction = db.transaction(STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      
+      // Try to get existing ID
+      const getRequest = store.get(KEY);
+      
+      getRequest.onsuccess = () => {
+        if (getRequest.result) {
+          // Return existing ID
+          resolve(getRequest.result);
+        } else {
+          // Create new ID if none exists
+          const newId = generateUUID();
+          store.put(newId, KEY);
+          resolve(newId);
+        }
+      };
+      
+      getRequest.onerror = () => {
+        // Fallback to generating a new ID if there's an error
+        resolve(generateUUID());
+      };
+    };
+    
+    request.onerror = () => {
+      // Fallback to generating a new ID if DB access fails
+      resolve(generateUUID());
+    };
   });
 }
 
@@ -898,6 +966,11 @@ export default class OfflineStorage {
   async queuePendingInvoice(invoice) {
     await this.ready;
     
+    // Ensure invoice has a tempId for tracking
+    if (!invoice.tempId) {
+      invoice.tempId = generateUUID();
+    }
+    
     // Check if the invoice already exists in the pending queue (based on temp ID or name)
     const isDuplicate = await this.checkDuplicateInvoice(invoice);
     if (isDuplicate) {
@@ -905,25 +978,59 @@ export default class OfflineStorage {
       return isDuplicate; // Return the existing ID instead of creating a duplicate
     }
     
-    // Create an envelope with a UUID for idempotency
-    const id = generateUUID();
+    // Get persistent device ID to include in the envelope
+    const deviceId = await getDeviceId();
+    
+    // Create a composite ID that includes device information and timestamp
+    // Format: deviceId-timestamp-hash(invoice data)
+    const timestamp = new Date().getTime();
+    
+    // Create a hash from key invoice data for idempotency
+    let invoiceDataHash = 0;
+    const keyData = JSON.stringify({
+      customer: invoice.customer || '',
+      items: Array.isArray(invoice.items) ? invoice.items.map(i => `${i.item_code}-${i.qty}`) : [],
+      total: invoice.grand_total || 0,
+      date: invoice.posting_date || ''
+    });
+    
+    for (let i = 0; i < keyData.length; i++) {
+      invoiceDataHash = ((invoiceDataHash << 5) - invoiceDataHash) + keyData.charCodeAt(i);
+      invoiceDataHash = invoiceDataHash & invoiceDataHash;
+    }
+    invoiceDataHash = Math.abs(invoiceDataHash).toString(16).slice(0, 8);
+    
+    // Create guaranteed unique ID combining device, time and invoice data
+    const id = `${deviceId.split('-')[1]}-${timestamp.toString(16)}-${invoiceDataHash}`;
+    
+    // Store the full original tempId for reference
+    if (invoice.tempId) {
+      invoice.originalTempId = invoice.tempId;
+    }
+    
     const envelope = {
       id,
       data: invoice,
       status: 'pending',
       timestamp: new Date().toISOString(),
       attempts: 0,
-      // Store additional metadata to help with duplicate detection
+      deviceId: deviceId,
+      // Enhanced metadata for duplicate detection and debugging
       metadata: {
         customer: invoice.customer || 'unknown',
         total: invoice.grand_total || 0,
         tempId: invoice.tempId || null,
-        items: Array.isArray(invoice.items) ? invoice.items.length : 0
+        items: Array.isArray(invoice.items) ? invoice.items.length : 0,
+        hash: invoiceDataHash,
+        createdAt: timestamp
       }
     };
     
     // Add sync lock to prevent concurrent processing of this invoice
     envelope.syncLock = null;
+    
+    // For debugging and auditing
+    console.log(`[OfflineStorage] Queuing invoice with ID: ${id}, tempId: ${invoice.tempId}`);
     
     await this.saveData('pendingInvoices', envelope);
     return id;
@@ -942,25 +1049,51 @@ export default class OfflineStorage {
         return null;
       }
       
-      // If the invoice has a name (existing invoice), check for it
+      console.log(`[OfflineStorage] Checking for duplicates among ${pendingInvoices.length} pending invoices`);
+      
+      // If the invoice has a name (existing invoice), check for it first
       if (invoice.name) {
         const duplicate = pendingInvoices.find(
           (pending) => pending.data && pending.data.name === invoice.name
         );
-        if (duplicate) return duplicate.id;
+        if (duplicate) {
+          console.log(`[OfflineStorage] Found duplicate by name: ${invoice.name}`);
+          return duplicate.id;
+        }
       }
       
-      // If the invoice has a tempId, check for that
+      // If the invoice has a tempId, check for that next
       if (invoice.tempId) {
         const duplicate = pendingInvoices.find(
-          (pending) => pending.data && pending.data.tempId === invoice.tempId
+          (pending) => 
+            (pending.data && pending.data.tempId === invoice.tempId) ||
+            (pending.data && pending.data.originalTempId === invoice.tempId)
         );
-        if (duplicate) return duplicate.id;
+        if (duplicate) {
+          console.log(`[OfflineStorage] Found duplicate by tempId: ${invoice.tempId}`);
+          return duplicate.id;
+        }
       }
       
-      // If no exact match, try to identify duplicates based on metadata
-      // Only consider very recent submissions (within the last 30 seconds)
-      const recentTimestamp = new Date(Date.now() - 30000).toISOString();
+      // If no exact match, generate a content fingerprint for this invoice
+      let invoiceFingerprint = this.generateInvoiceFingerprint(invoice);
+      
+      // Look for fingerprint matches - this detects duplicates that may have different IDs
+      // but represent the same actual invoice content
+      const fingerprintMatch = pendingInvoices.find(pending => {
+        // Generate fingerprint for the pending invoice
+        const pendingFingerprint = this.generateInvoiceFingerprint(pending.data);
+        return invoiceFingerprint === pendingFingerprint;
+      });
+      
+      if (fingerprintMatch) {
+        console.log(`[OfflineStorage] Found duplicate by content fingerprint`);
+        return fingerprintMatch.id;
+      }
+      
+      // If no fingerprint match, try to identify duplicates based on metadata
+      // Only consider very recent submissions (within the last 60 seconds)
+      const recentTimestamp = new Date(Date.now() - 60000).toISOString();
       
       const possibleDuplicates = pendingInvoices.filter(pending => {
         // Skip old pending invoices
@@ -973,6 +1106,13 @@ export default class OfflineStorage {
         if (!pending.data.items || !invoice.items) return false;
         if (pending.data.items.length !== invoice.items.length) return false;
         
+        // Check if items are essentially the same
+        const pendingItemCodes = new Set(pending.data.items.map(item => item.item_code));
+        const newItemCodes = new Set(invoice.items.map(item => item.item_code));
+        const itemDifference = [...pendingItemCodes].filter(x => !newItemCodes.has(x)).length +
+                              [...newItemCodes].filter(x => !pendingItemCodes.has(x)).length;
+        if (itemDifference > 0) return false;
+        
         // Must have same grand total (within a small tolerance)
         const totalDiff = Math.abs(
           (pending.data.grand_total || 0) - (invoice.grand_total || 0)
@@ -983,18 +1123,55 @@ export default class OfflineStorage {
       });
       
       if (possibleDuplicates.length > 0) {
-        console.warn('[OfflineStorage] Possible duplicate invoice detected', {
+        console.warn('[OfflineStorage] Possible duplicate invoice detected by metadata', {
           existing: possibleDuplicates[0].id,
           new: invoice.tempId || 'new invoice'
         });
         return possibleDuplicates[0].id;
       }
       
+      // No duplicate found
+      console.log('[OfflineStorage] No duplicate found, proceeding with new invoice');
       return null;
     } catch (error) {
       console.error('[OfflineStorage] Error checking for duplicate invoice:', error);
       return null; // In case of error, allow the invoice to be queued
     }
+  }
+
+  /**
+   * Generate a unique fingerprint for an invoice based on its content
+   * @param {Object} invoice The invoice to generate a fingerprint for
+   * @returns {string} The fingerprint
+   */
+  generateInvoiceFingerprint(invoice) {
+    if (!invoice) return '';
+    
+    // Extract key fields that define an invoice's "identity"
+    const keyData = {
+      customer: invoice.customer || '',
+      posting_date: invoice.posting_date || '',
+      total: invoice.grand_total || 0,
+      items: Array.isArray(invoice.items) 
+        ? invoice.items.map(item => ({
+            item_code: item.item_code,
+            qty: item.qty,
+            rate: item.rate
+          })).sort((a, b) => a.item_code.localeCompare(b.item_code))
+        : []
+    };
+    
+    // Create a deterministic JSON string (sort keys)
+    const jsonString = JSON.stringify(keyData, Object.keys(keyData).sort());
+    
+    // Create a hash of the JSON string
+    let hash = 0;
+    for (let i = 0; i < jsonString.length; i++) {
+      hash = ((hash << 5) - hash) + jsonString.charCodeAt(i);
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    
+    return hash.toString(16);
   }
 
   /**
@@ -1135,6 +1312,9 @@ export default class OfflineStorage {
     
     console.log(`[OfflineStorage] Found ${availableInvoices.length} available invoices to process`);
     
+    // Get device ID for additional idempotency control
+    const deviceId = await getDeviceId();
+    
     // Process each invoice
     const results = await Promise.allSettled(
       availableInvoices.map(async (envelope) => {
@@ -1148,17 +1328,63 @@ export default class OfflineStorage {
           envelope.attempts += 1;
           await this.saveData('pendingInvoices', envelope);
           
-          // Submit the invoice with idempotency key
+          // First, check if the invoice already exists on the server
+          // This prevents duplicate submissions even if our idempotency fails
+          if (envelope.data.name) {
+            try {
+              // Check if this invoice already exists on the server
+              const checkResponse = await fetch('/api/method/posawesome.posawesome.api.posapp.check_invoice_exists', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  invoice_name: envelope.data.name
+                })
+              });
+              
+              const checkResult = await checkResponse.json();
+              if (checkResult.message === true) {
+                console.log(`[OfflineStorage] Invoice ${envelope.data.name} already exists on server`);
+                // Invoice already exists - we can safely remove it from pending
+                await this.deleteData('pendingInvoices', envelope.id);
+                return { status: 'already_exists', id: envelope.id };
+              }
+            } catch (error) {
+              console.warn(`[OfflineStorage] Error checking if invoice exists:`, error);
+              // Continue with submission - we'll let the server handle potential duplicates
+            }
+          }
+          
+          // Create a robust idempotency key that combines:
+          // 1. Device ID (consistent across sessions)
+          // 2. Envelope ID (unique per invoice)
+          // 3. Invoice content fingerprint
+          const idempotencyKey = `${deviceId}-${envelope.id}-${this.generateInvoiceFingerprint(envelope.data)}`;
+          
+          // Submit the invoice with enhanced idempotency key
           const response = await fetch('/api/method/posawesome.posawesome.api.posapp.submit_invoice', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Idempotency-Key': envelope.id
+              'Idempotency-Key': idempotencyKey
             },
-            body: JSON.stringify(envelope.data)
+            body: JSON.stringify({
+              invoice: JSON.stringify(envelope.data),
+              data: JSON.stringify({
+                ...envelope.data,
+                // Include metadata for server-side logging and debugging
+                metadata: {
+                  deviceId: deviceId,
+                  envelopeId: envelope.id,
+                  tempId: envelope.data.tempId || null,
+                  originalTempId: envelope.data.originalTempId || null,
+                  timestamp: envelope.timestamp,
+                  attempt: envelope.attempts
+                }
+              })
+            })
           });
-          
-          const result = await response.json();
           
           // Check if the invoice is still in the database with our lock
           const currentEnvelope = await this.getData('pendingInvoices', envelope.id);
@@ -1167,32 +1393,72 @@ export default class OfflineStorage {
             return { status: 'concurrent_processing', id: envelope.id };
           }
           
-          if (response.status === 409) {
-            // Conflict detected, move to conflicts store
-            await this.saveData('conflicts', envelope);
-            await this.deleteData('pendingInvoices', envelope.id);
-            return { status: 'conflict', id: envelope.id };
-          } else if (result.error) {
-            // Server error
-            if (envelope.attempts >= 3) {
-              // Move to conflicts after 3 attempts
-              envelope.status = 'failed';
-              envelope.error = result.error;
-              await this.saveData('conflicts', envelope);
-              await this.deleteData('pendingInvoices', envelope.id);
-              return { status: 'failed', id: envelope.id, error: result.error };
-            }
+          // If the response is successful but not JSON (e.g. HTML error page)
+          if (response.ok && !response.headers.get('content-type')?.includes('application/json')) {
+            console.warn(`[OfflineStorage] Received non-JSON response for invoice ${envelope.id}`);
             // Clear the sync lock so it can be retried
             envelope.syncLock = null;
             await this.saveData('pendingInvoices', envelope);
-            return { status: 'retry', id: envelope.id };
-          } else {
-            // Success
-            await this.deleteData('pendingInvoices', envelope.id);
-            if (result.invoice) {
-              await this.saveInvoice(result.invoice);
+            return { status: 'retry', id: envelope.id, error: 'Non-JSON response' };
+          }
+          
+          try {
+            const result = await response.json();
+            
+            if (response.status === 409) {
+              // Conflict detected, move to conflicts store
+              await this.saveData('conflicts', envelope);
+              await this.deleteData('pendingInvoices', envelope.id);
+              return { status: 'conflict', id: envelope.id };
+            } else if (result.exc_type === 'PermissionError') {
+              // Permission error - move to conflicts
+              envelope.status = 'permission_denied';
+              envelope.error = result.message;
+              envelope.syncLock = null;
+              await this.saveData('conflicts', envelope);
+              await this.deleteData('pendingInvoices', envelope.id);
+              return { status: 'permission_denied', id: envelope.id };
+            } else if (result.exc_type === 'DuplicateEntryError') {
+              // Duplicate detected by server - can safely remove
+              console.log(`[OfflineStorage] Server detected duplicate entry for invoice ${envelope.id}`);
+              await this.deleteData('pendingInvoices', envelope.id);
+              return { status: 'duplicate', id: envelope.id };
+            } else if (result.error || result.exc_type) {
+              // Server error
+              const errorMessage = result.error || result.exception || result.message || 'Unknown server error';
+              if (envelope.attempts >= 3) {
+                // Move to conflicts after 3 attempts
+                envelope.status = 'failed';
+                envelope.error = errorMessage;
+                await this.saveData('conflicts', envelope);
+                await this.deleteData('pendingInvoices', envelope.id);
+                return { status: 'failed', id: envelope.id, error: errorMessage };
+              }
+              // Clear the sync lock so it can be retried
+              envelope.syncLock = null;
+              envelope.lastError = errorMessage;
+              await this.saveData('pendingInvoices', envelope);
+              return { status: 'retry', id: envelope.id, error: errorMessage };
+            } else {
+              // Success
+              await this.deleteData('pendingInvoices', envelope.id);
+              if (result.message && result.message.name) {
+                // Save the server response invoice data
+                try {
+                  await this.saveInvoice(result.message);
+                } catch (saveError) {
+                  console.warn(`[OfflineStorage] Error saving processed invoice:`, saveError);
+                }
+              }
+              return { status: 'success', id: envelope.id, serverName: result.message?.name };
             }
-            return { status: 'success', id: envelope.id };
+          } catch (jsonError) {
+            console.error(`[OfflineStorage] Error parsing JSON response for invoice ${envelope.id}:`, jsonError);
+            // Clear the sync lock so it can be retried
+            envelope.syncLock = null;
+            envelope.lastError = 'Invalid server response';
+            await this.saveData('pendingInvoices', envelope);
+            return { status: 'retry', id: envelope.id, error: 'Invalid server response' };
           }
         } catch (error) {
           console.error(`[OfflineStorage] Error processing invoice ${envelope.id}:`, error);
@@ -1216,8 +1482,9 @@ export default class OfflineStorage {
           
           // Clear the sync lock so it can be retried
           currentEnvelope.syncLock = null;
+          currentEnvelope.lastError = error.message;
           await this.saveData('pendingInvoices', currentEnvelope);
-          return { status: 'retry', id: envelope.id };
+          return { status: 'retry', id: envelope.id, error: error.message };
         }
       })
     );
