@@ -483,8 +483,13 @@ export default {
         // Make it available globally for other components
         window.offlineStorage = this.offlineStorage;
         
-        // Wait for the database to be ready
-        await this.offlineStorage.ready;
+        // Wait for the database to be ready with timeout
+        const dbInitPromise = this.offlineStorage.ready;
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Database initialization timeout')), 10000);
+        });
+        
+        await Promise.race([dbInitPromise, timeoutPromise]);
         
         console.log('[Home] Offline storage initialized successfully');
         
@@ -499,62 +504,18 @@ export default {
         
         // Handle any HANDLE_SYNC messages from service worker
         if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-          navigator.serviceWorker.addEventListener('message', (event) => {
-            if (event.data && event.data.type === 'HANDLE_SYNC') {
-              console.log('[Home] Received HANDLE_SYNC message from service worker');
-              if (this.offlineStorage && !this.syncingInProgress) {
-                // Process pending invoices and then notify the service worker when done
-                this.offlineStorage.processPendingInvoices()
-                  .then(results => {
-                    if (navigator.serviceWorker.controller) {
-                      navigator.serviceWorker.controller.postMessage({
-                        type: 'SYNC_COMPLETED',
-                        timestamp: Date.now(),
-                        results: results
-                      });
-                    }
-                  })
-                  .catch(error => {
-                    console.error('[Home] Error processing pending invoices:', error);
-                    if (navigator.serviceWorker.controller) {
-                      navigator.serviceWorker.controller.postMessage({
-                        type: 'SYNC_FAILED',
-                        timestamp: Date.now(),
-                        error: error.message
-                      });
-                    }
-                  });
-              }
-            }
+          navigator.serviceWorker.controller.postMessage({
+            type: 'INIT_OFFLINE_STORAGE',
+            timestamp: Date.now()
           });
-        }
-        
-        // Check if bootstrap is required
-        await this.checkBootstrapRequired();
-        
-        if (this.bootstrapRequired && !this.bootstrapSkipped) {
-          // Open the bootstrap dialog automatically if required
-          this.$nextTick(() => {
-            this.openBootstrapDialog();
-          });
-        }
-        
-        // Tell components bootstrap is available
-        this.eventBus.emit('bootstrap_dialog_ready');
-        
-        // App is now fully initialized
-        this.appInitialized = true;
-        
-        // If we're online, attempt an initial sync
-          if (navigator.onLine) {
-          setTimeout(() => {
-            this.attemptSync();
-          }, 5000); // Wait 5 seconds after initialization
         }
       } catch (error) {
-        console.error('[Home] Error setting up offline support:', error);
-        // Enable manual sync as fallback
-        this.enableManualSync();
+        console.error('[Home] Failed to setup offline support:', error);
+        // Show error to user
+        this.$root.$emit('show-error', {
+          title: 'Offline Support Error',
+          message: 'Failed to initialize offline storage. Some features may not work properly.'
+        });
       }
     },
     

@@ -189,19 +189,28 @@ async function cacheFirstStrategy(request) {
     const cachedResponse = await caches.match(request);
     
     if (cachedResponse) {
+      // If we have a cached response, return it immediately
       return cachedResponse;
     }
     
-    // Not in cache, get from network
-    const networkResponse = await fetch(request);
-    
-    // Cache the response if valid
-    if (networkResponse && networkResponse.status === 200) {
-      const cache = await caches.open(STATIC_CACHE_NAME);
-      cache.put(request, networkResponse.clone());
+    // Not in cache, try network
+    try {
+      const networkResponse = await fetch(request);
+      
+      // Cache the response if valid
+      if (networkResponse && networkResponse.status === 200) {
+        const cache = await caches.open(STATIC_CACHE_NAME);
+        cache.put(request, networkResponse.clone());
+      }
+      
+      return networkResponse;
+    } catch (error) {
+      // If network fails and we're offline, return offline page
+      if (!isOnline) {
+        return caches.match(OFFLINE_PAGE);
+      }
+      throw error;
     }
-    
-    return networkResponse;
   } catch (error) {
     console.error('[Service Worker] Cache first strategy failed:', error);
     return caches.match(OFFLINE_PAGE);
@@ -214,12 +223,12 @@ async function cacheFirstStrategy(request) {
  */
 async function networkFirstStrategy(request) {
   try {
-    // Try to get from network first
+    // Try network first if online
     if (isOnline) {
       try {
         const networkResponse = await fetch(request.clone());
         
-        // Cache the successful response
+        // Cache successful responses
         if (networkResponse && networkResponse.status === 200) {
           const cache = await caches.open(API_CACHE_NAME);
           cache.put(request, networkResponse.clone());
@@ -228,21 +237,21 @@ async function networkFirstStrategy(request) {
         return networkResponse;
       } catch (error) {
         console.log('[Service Worker] Network request failed, trying cache:', error);
-        // Network request failed, try cache
       }
     }
     
-    // Try to get from cache if offline or network failed
+    // Try cache if offline or network failed
     const cachedResponse = await caches.match(request);
     
     if (cachedResponse) {
       return cachedResponse;
     }
     
-    // If not in cache and network failed, return offline response
+    // If not in cache and offline, return offline response
     return new Response(
       JSON.stringify({ 
-        error: 'You are offline and this data is not cached' 
+        error: 'You are offline and this data is not cached',
+        timestamp: Date.now()
       }),
       { 
         status: 503,
@@ -252,7 +261,10 @@ async function networkFirstStrategy(request) {
   } catch (error) {
     console.error('[Service Worker] Network first strategy failed:', error);
     return new Response(
-      JSON.stringify({ error: 'Service unavailable' }),
+      JSON.stringify({ 
+        error: 'Service unavailable',
+        timestamp: Date.now()
+      }),
       { 
         status: 503,
         headers: { 'Content-Type': 'application/json' }

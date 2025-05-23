@@ -191,34 +191,17 @@ export default class OfflineStorage {
    * Setup all network-related event listeners
    */
   setupNetworkListeners() {
-    // Standard network events
-    const onlineHandler = this.handleNetworkChange.bind(this, true);
-    const offlineHandler = this.handleNetworkChange.bind(this, false);
+    // Listen for online/offline events
+    window.addEventListener('online', this.handleOnline.bind(this));
+    window.addEventListener('offline', this.handleOffline.bind(this));
     
-    window.addEventListener('online', onlineHandler);
-    window.addEventListener('offline', offlineHandler);
+    // Listen for service worker network status events
+    window.addEventListener('pos-awesome-sw-network-status', this.handleServiceWorkerNetworkStatus.bind(this));
     
-    // Store event listeners for cleanup
-    this.networkEventListeners.push(
-      { event: 'online', handler: onlineHandler },
-      { event: 'offline', handler: offlineHandler }
-    );
-    
-    // Additional events that might signal connection changes
+    // Listen for connection changes
     if (navigator.connection) {
-      const connectionChangeHandler = this.handleConnectionChange.bind(this);
-      navigator.connection.addEventListener('change', connectionChangeHandler);
-      this.networkEventListeners.push(
-        { event: 'change', target: navigator.connection, handler: connectionChangeHandler }
-      );
+      navigator.connection.addEventListener('change', this.handleConnectionChange.bind(this));
     }
-    
-    // Handle visibility change which might affect connection state
-    const visibilityChangeHandler = this.handleVisibilityChange.bind(this);
-    document.addEventListener('visibilitychange', visibilityChangeHandler);
-    this.networkEventListeners.push(
-      { event: 'visibilitychange', target: document, handler: visibilityChangeHandler }
-    );
   }
   
   /**
@@ -239,28 +222,29 @@ export default class OfflineStorage {
   /**
    * Check current network status and dispatch events if needed
    */
-  checkNetworkStatus() {
-    const isCurrentlyOnline = navigator.onLine;
-    const now = Date.now();
-    
-    // Only update if it's been more than 5 seconds since last check
-    if (now - this.lastOnlineCheckTime > 5000) {
-      this.lastOnlineCheckTime = now;
+  async checkNetworkStatus() {
+    try {
+      // Try to fetch a small resource to check connectivity
+      const response = await fetch('/api/method/ping', {
+        method: 'GET',
+        headers: {
+          'Cache-Control': 'no-cache',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        mode: 'cors'
+      });
       
-      // If online, try to actually check connectivity by making a tiny request
-      if (isCurrentlyOnline) {
-        this.testActualConnectivity()
-          .then(isReallyConnected => {
-            if (!isReallyConnected) {
-              console.log('[OfflineStorage] Navigator reports online but no actual connectivity');
-              // If we can't reach the server, treat as offline even if navigator says online
-              this.handleNetworkChange(false);
-            }
-          })
-          .catch(err => {
-            console.warn('[OfflineStorage] Error checking connectivity:', err);
-          });
-      }
+      const isOnline = response.ok;
+      this.lastOnlineCheckTime = Date.now();
+      
+      // Notify listeners of status change
+      this.notifyNetworkStatusChange(isOnline);
+      
+      return isOnline;
+    } catch (error) {
+      console.error('[OfflineStorage] Network status check failed:', error);
+      this.notifyNetworkStatusChange(false);
+      return false;
     }
   }
   
@@ -1970,5 +1954,25 @@ export default class OfflineStorage {
     }
     
     return results;
+  }
+
+  notifyNetworkStatusChange(isOnline) {
+    // Notify all registered listeners
+    this.networkEventListeners.forEach(listener => {
+      try {
+        listener(isOnline);
+      } catch (error) {
+        console.error('[OfflineStorage] Error in network status listener:', error);
+      }
+    });
+    
+    // Also notify service worker if available
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'NETWORK_STATUS',
+        isOnline,
+        timestamp: Date.now()
+      });
+    }
   }
 } 
