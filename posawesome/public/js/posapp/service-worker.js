@@ -4,21 +4,21 @@
  * Version: 1.0.0
  */
 
-// Cache names
-const STATIC_CACHE_NAME = 'pos-awesome-static-v1';
-const DYNAMIC_CACHE_NAME = 'pos-awesome-dynamic-v1';
-const API_CACHE_NAME = 'pos-awesome-api-v1';
+// Cache Names
+const CACHE_VERSION = 'v1';
+const STATIC_CACHE_NAME = 'pos-awesome-static-' + CACHE_VERSION;
+const DYNAMIC_CACHE_NAME = 'pos-awesome-dynamic-' + CACHE_VERSION;
+const API_CACHE_NAME = 'pos-awesome-api-' + CACHE_VERSION;
 
-// Resources to cache immediately on install
+// Resources to cache
 const STATIC_RESOURCES = [
-  '/posawesome/public/js/posapp/bundle.js',
-  '/posawesome/public/css/posawesome.css',
-  '/assets/css/frappe-web.min.css',
-  '/assets/js/frappe-web.min.js',
-  '/posawesome/point-of-sale',
-  '/posawesome/public/js/posapp/offline.html',
-  '/posawesome/public/images/pos-loading.gif',
-  '/posawesome/public/images/pos-offline.svg',
+  '/',
+  '/posawesome/public/js/posapp/index.html',
+  '/posawesome/public/js/posapp/app.js',
+  '/posawesome/public/js/posapp/styles.css',
+  '/posawesome/public/js/posapp/manifest.json',
+  '/posawesome/public/js/posapp/assets/icons/*',
+  // Add other static resources
 ];
 
 // Default offline page
@@ -27,11 +27,12 @@ const OFFLINE_PAGE = '/posawesome/public/js/posapp/offline.html';
 // Maximum number of items to keep in dynamic cache
 const DYNAMIC_CACHE_MAX_ITEMS = 100;
 
-// API endpoints to cache with network-first strategy
+// API endpoints to cache
 const API_ENDPOINTS = [
-  '/api/method/posawesome.posawesome.api.posapp.get_items',
-  '/api/method/posawesome.posawesome.api.posapp.get_customers',
-  '/api/method/posawesome.posawesome.api.posapp.get_pos_profile'
+  '/api/method/frappe.auth.get_logged_user',
+  '/api/method/posawesome.posawesome.api.get_items',
+  '/api/method/posawesome.posawesome.api.get_customers',
+  // Add other API endpoints
 ];
 
 // Network status tracking
@@ -185,26 +186,19 @@ self.addEventListener('message', event => {
  * Used for static resources that rarely change
  */
 async function cacheFirstStrategy(request) {
+  const cachedResponse = await caches.match(request);
+  if (cachedResponse) {
+    return cachedResponse;
+  }
+  
   try {
-    const cachedResponse = await caches.match(request);
-    
-    if (cachedResponse) {
-      return cachedResponse;
-    }
-    
-    // Not in cache, get from network
     const networkResponse = await fetch(request);
-    
-    // Cache the response if valid
-    if (networkResponse && networkResponse.status === 200) {
-      const cache = await caches.open(STATIC_CACHE_NAME);
-      cache.put(request, networkResponse.clone());
-    }
-    
+    const cache = await caches.open(STATIC_CACHE_NAME);
+    cache.put(request, networkResponse.clone());
     return networkResponse;
   } catch (error) {
     console.error('[Service Worker] Cache first strategy failed:', error);
-    return caches.match(OFFLINE_PAGE);
+    throw error;
   }
 }
 
@@ -214,50 +208,24 @@ async function cacheFirstStrategy(request) {
  */
 async function networkFirstStrategy(request) {
   try {
-    // Try to get from network first
-    if (isOnline) {
-      try {
-        const networkResponse = await fetch(request.clone());
-        
-        // Cache the successful response
-        if (networkResponse && networkResponse.status === 200) {
-          const cache = await caches.open(API_CACHE_NAME);
-          cache.put(request, networkResponse.clone());
-        }
-        
-        return networkResponse;
-      } catch (error) {
-        console.log('[Service Worker] Network request failed, trying cache:', error);
-        // Network request failed, try cache
-      }
-    }
+    const networkResponse = await Promise.race([
+      fetch(request),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('timeout')), 5000)
+      )
+    ]);
     
-    // Try to get from cache if offline or network failed
+    // Cache successful response
+    const cache = await caches.open(API_CACHE_NAME);
+    cache.put(request, networkResponse.clone());
+    return networkResponse;
+  } catch (error) {
+    console.log('[Service Worker] Network request failed, falling back to cache');
     const cachedResponse = await caches.match(request);
-    
     if (cachedResponse) {
       return cachedResponse;
     }
-    
-    // If not in cache and network failed, return offline response
-    return new Response(
-      JSON.stringify({ 
-        error: 'You are offline and this data is not cached' 
-      }),
-      { 
-        status: 503,
-        headers: { 'Content-Type': 'application/json' }
-      }
-    );
-  } catch (error) {
-    console.error('[Service Worker] Network first strategy failed:', error);
-    return new Response(
-      JSON.stringify({ error: 'Service unavailable' }),
-      { 
-        status: 503,
-        headers: { 'Content-Type': 'application/json' }
-      }
-    );
+    throw error;
   }
 }
 
@@ -267,66 +235,17 @@ async function networkFirstStrategy(request) {
  */
 async function networkWithCacheFallbackStrategy(request) {
   try {
-    // Try network first
-    if (isOnline) {
-      try {
-        const networkResponse = await fetch(request.clone());
-        
-        // Cache successful responses that are not no-store
-        if (
-          networkResponse && 
-          networkResponse.status === 200 && 
-          !networkResponse.headers.get('Cache-Control')?.includes('no-store')
-        ) {
-          const cache = await caches.open(DYNAMIC_CACHE_NAME);
-          cache.put(request, networkResponse.clone());
-          
-          // Limit the number of items in dynamic cache
-          trimCache(DYNAMIC_CACHE_NAME, DYNAMIC_CACHE_MAX_ITEMS);
-        }
-        
-        return networkResponse;
-      } catch (error) {
-        // Network request failed, try cache
-        console.log('[Service Worker] Network request failed, falling back to cache');
-      }
-    }
-    
-    // Try cache if network failed or offline
+    const networkResponse = await fetch(request);
+    const cache = await caches.open(DYNAMIC_CACHE_NAME);
+    cache.put(request, networkResponse.clone());
+    return networkResponse;
+  } catch (error) {
+    console.log('[Service Worker] Network request failed, falling back to cache');
     const cachedResponse = await caches.match(request);
-    
     if (cachedResponse) {
       return cachedResponse;
     }
-    
-    // If main page request and not in cache, return offline page
-    if (request.mode === 'navigate') {
-      return caches.match(OFFLINE_PAGE);
-    }
-    
-    // For other resources, try to fetch from network as a last resort
-    try {
-      return await fetch(request.clone());
-    } catch (error) {
-      console.error('[Service Worker] Both network and cache failed');
-      
-      // For API requests, return a JSON error
-      if (request.headers.get('Accept')?.includes('application/json')) {
-        return new Response(
-          JSON.stringify({ error: 'You are offline and this data is not cached' }),
-          { 
-            status: 503,
-            headers: { 'Content-Type': 'application/json' }
-          }
-        );
-      }
-      
-      // For other resources, return a simple text response
-      return new Response('Offline and not cached', { status: 503 });
-    }
-  } catch (error) {
-    console.error('[Service Worker] Network with cache fallback strategy failed:', error);
-    return caches.match(OFFLINE_PAGE);
+    throw error;
   }
 }
 
