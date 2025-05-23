@@ -1557,6 +1557,22 @@ export default {
     // Process and save invoice (handles update or create)
     process_invoice() {
       try {
+        // Field validation for customer, items, and tax
+        const validationErrors = this.validateInvoiceFields();
+        if (validationErrors.length > 0) {
+          // Log validation errors
+          console.error('Invoice validation errors:', validationErrors);
+          
+          // Show specific errors in UI
+          this.eventBus.emit('show_message', {
+            title: __('Invoice Validation Failed'),
+            message: validationErrors.join('\n'),
+            color: 'error'
+          });
+          
+          return null;
+        }
+        
         const doc = this.get_invoice_doc();
         if (!doc) {
           throw new Error('Failed to create invoice document');
@@ -1638,32 +1654,17 @@ export default {
             return;
           }
           
-          // Basic validations still apply in offline mode
-          if (!this.customer) {
-            // Use alert instead of eventBus
-            alert(__(`Select a customer`));
+          // Use the new validation function for online mode too
+          const validationErrors = this.validateInvoiceFields();
+          if (validationErrors.length > 0) {
+            // Log validation errors
+            console.error('Offline validation errors:', validationErrors);
+            
+            // Show specific errors in UI (using alert for offline)
+            alert(__('Invoice Validation Failed: ') + validationErrors.join(', '));
             return;
           }
 
-          if (!this.items.length) {
-            // Use alert instead of eventBus
-            alert(__(`Select items to sell`));
-            return;
-          }
-
-          // Perform basic validation (limited in offline mode)
-          try {
-            const isValid = await this.validate();
-            if (!isValid) {
-              return;
-            }
-          } catch (error) {
-            console.error('Validation error:', error);
-            // Use alert instead of eventBus
-            alert(__("Validation error: ") + (error.message || "Unknown error"));
-            return;
-          }
-          
           // Show confirmation dialog for offline saving
           try {
             if (confirm(__('You are offline. Save this invoice for syncing later?'))) {
@@ -1683,21 +1684,17 @@ export default {
           return;
         }
 
-        // Normal online flow (existing code)
-        if (!this.customer) {
-          console.log('Customer validation failed');
-          this.eventBus.emit("show_message", {
-            title: __(`Select a customer`),
-            color: "error",
-          });
-          return;
-        }
-
-        if (!this.items.length) {
-          console.log('Items validation failed - no items');
-          this.eventBus.emit("show_message", {
-            title: __(`Select items to sell`),
-            color: "error",
+        // Use the new validation function for online mode too
+        const validationErrors = this.validateInvoiceFields();
+        if (validationErrors.length > 0) {
+          // Log validation errors
+          console.error('Online validation errors:', validationErrors);
+          
+          // Show specific errors in UI
+          this.eventBus.emit('show_message', {
+            title: __('Invoice Validation Failed'),
+            message: validationErrors.join('\n'),
+            color: 'error'
           });
           return;
         }
@@ -1807,7 +1804,14 @@ export default {
 
     // Validate invoice before payment/submit (return logic, quantity, rates, etc)
     async validate() {
-      console.log('Starting return validation');
+      console.log('Starting validation process');
+      
+      // First run basic field validation
+      const fieldErrors = this.validateInvoiceFields();
+      if (fieldErrors.length > 0) {
+        console.log('Field validation errors:', fieldErrors);
+        return false;
+      }
       
       // For all returns, check if amounts are negative
       if (this.invoiceType === 'Return' || this.invoice_doc.is_return) {
@@ -4275,6 +4279,18 @@ export default {
       }
       
       try {
+        // Field validation for customer, items, and tax (for offline mode too)
+        const validationErrors = this.validateInvoiceFields();
+        if (validationErrors.length > 0) {
+          // Log validation errors
+          console.error('Offline invoice validation errors:', validationErrors);
+          
+          // Show specific errors in UI (using alert for offline)
+          alert(__('Invoice Validation Failed: ') + validationErrors.join(', '));
+          
+          return false;
+        }
+        
         // Prepare invoice document
         console.log('Preparing invoice for offline storage');
         let invoiceDoc;
@@ -4313,6 +4329,99 @@ export default {
         alert(__('Failed to save invoice offline: ') + (error.message || 'Unknown error'));
         return false;
       }
+    },
+
+    // New method to validate invoice fields
+    validateInvoiceFields() {
+      const errors = [];
+      
+      // Validate customer
+      if (!this.customer) {
+        errors.push(__('Customer is required'));
+      }
+      
+      // Validate items
+      if (!this.items || this.items.length === 0) {
+        errors.push(__('At least one item is required'));
+      } else {
+        // Validate each item's required fields
+        this.items.forEach((item, index) => {
+          const itemPosition = index + 1;
+          
+          if (!item.item_code) {
+            errors.push(__(`Item #${itemPosition}: Item code is required`));
+          }
+          
+          if (!item.qty || item.qty === 0) {
+            errors.push(__(`Item #${itemPosition}: Quantity must be non-zero`));
+          }
+          
+          if (!item.rate || item.rate === 0) {
+            errors.push(__(`Item #${itemPosition}: Rate must be non-zero`));
+          }
+          
+          // Check stock availability if not a return invoice
+          if (!this.invoice_doc.is_return && this.pos_profile.update_stock) {
+            // Skip validation for free/offer items
+            if (!item.posa_is_offer && !item.is_free_item) {
+              // If warehouse is specified and item tracks stock
+              if (item.warehouse && !item.has_serial_no && !item.has_batch_no) {
+                if (item.actual_qty < item.qty) {
+                  errors.push(__(`Item #${itemPosition}: Insufficient stock for ${item.item_code} in ${item.warehouse}. Available: ${item.actual_qty}, Required: ${item.qty}`));
+                }
+              }
+              
+              // Check batch stock if using batch
+              if (item.has_batch_no && item.batch_no) {
+                if (item.actual_batch_qty < item.qty) {
+                  errors.push(__(`Item #${itemPosition}: Insufficient batch stock for ${item.item_code} in batch ${item.batch_no}. Available: ${item.actual_batch_qty}, Required: ${item.qty}`));
+                }
+              }
+              
+              // Check if serial numbers are properly selected
+              if (item.has_serial_no && item.serial_no_selected) {
+                if (item.serial_no_selected.length < Math.abs(item.qty)) {
+                  errors.push(__(`Item #${itemPosition}: Please select ${Math.abs(item.qty)} serial numbers for ${item.item_code}. Currently selected: ${item.serial_no_selected.length}`));
+                }
+              }
+            }
+          }
+          
+          // If return and original invoice referenced, validate return quantity doesn't exceed original
+          if (this.invoice_doc.is_return && this.invoice_doc.return_against && this.return_doc) {
+            const original_items = this.return_doc.items || [];
+            const original_item = original_items.find(orig => orig.item_code === item.item_code);
+            
+            if (original_item && Math.abs(item.qty) > original_item.qty) {
+              errors.push(__(`Item #${itemPosition}: Return quantity (${Math.abs(item.qty)}) exceeds original quantity (${original_item.qty})`));
+            }
+          }
+        });
+      }
+      
+      // Validate tax settings if using custom taxes
+      if (this.pos_profile.posa_use_custom_taxes) {
+        // Ensure tax account is set (if required by POS profile)
+        const tax_account = this.pos_profile.posa_tax_account;
+        if (!tax_account) {
+          errors.push(__('Tax account is not configured in POS Profile'));
+        }
+      }
+      
+      // Additional validation for specific invoice types
+      if (this.invoiceType === 'Order') {
+        // Validate delivery date is set for items in Sales Order
+        const itemsMissingDeliveryDate = this.items.filter(
+          item => !item.posa_delivery_date
+        );
+        
+        if (itemsMissingDeliveryDate.length > 0) {
+          const missingItems = itemsMissingDeliveryDate.map(item => item.item_code).join(', ');
+          errors.push(__(`Delivery date is required for items: ${missingItems}`));
+        }
+      }
+      
+      return errors;
     },
   },
 
