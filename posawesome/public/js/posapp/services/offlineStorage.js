@@ -898,6 +898,13 @@ export default class OfflineStorage {
   async queuePendingInvoice(invoice) {
     await this.ready;
     
+    // Check if the invoice already exists in the pending queue (based on temp ID or name)
+    const isDuplicate = await this.checkDuplicateInvoice(invoice);
+    if (isDuplicate) {
+      console.warn('[OfflineStorage] Duplicate invoice submission detected and prevented');
+      return isDuplicate; // Return the existing ID instead of creating a duplicate
+    }
+    
     // Create an envelope with a UUID for idempotency
     const id = generateUUID();
     const envelope = {
@@ -905,11 +912,89 @@ export default class OfflineStorage {
       data: invoice,
       status: 'pending',
       timestamp: new Date().toISOString(),
-      attempts: 0
+      attempts: 0,
+      // Store additional metadata to help with duplicate detection
+      metadata: {
+        customer: invoice.customer || 'unknown',
+        total: invoice.grand_total || 0,
+        tempId: invoice.tempId || null,
+        items: Array.isArray(invoice.items) ? invoice.items.length : 0
+      }
     };
+    
+    // Add sync lock to prevent concurrent processing of this invoice
+    envelope.syncLock = null;
     
     await this.saveData('pendingInvoices', envelope);
     return id;
+  }
+
+  /**
+   * Check if an invoice already exists in the pending queue
+   * @param {Object} invoice The invoice to check
+   * @returns {Promise<string|null>} The ID of the duplicate invoice if found, null otherwise
+   */
+  async checkDuplicateInvoice(invoice) {
+    try {
+      // Get all pending invoices
+      const pendingInvoices = await this.getAllData('pendingInvoices');
+      if (!pendingInvoices || pendingInvoices.length === 0) {
+        return null;
+      }
+      
+      // If the invoice has a name (existing invoice), check for it
+      if (invoice.name) {
+        const duplicate = pendingInvoices.find(
+          (pending) => pending.data && pending.data.name === invoice.name
+        );
+        if (duplicate) return duplicate.id;
+      }
+      
+      // If the invoice has a tempId, check for that
+      if (invoice.tempId) {
+        const duplicate = pendingInvoices.find(
+          (pending) => pending.data && pending.data.tempId === invoice.tempId
+        );
+        if (duplicate) return duplicate.id;
+      }
+      
+      // If no exact match, try to identify duplicates based on metadata
+      // Only consider very recent submissions (within the last 30 seconds)
+      const recentTimestamp = new Date(Date.now() - 30000).toISOString();
+      
+      const possibleDuplicates = pendingInvoices.filter(pending => {
+        // Skip old pending invoices
+        if (pending.timestamp < recentTimestamp) return false;
+        
+        // Must have same customer
+        if (pending.data.customer !== invoice.customer) return false;
+        
+        // Must have same number of items
+        if (!pending.data.items || !invoice.items) return false;
+        if (pending.data.items.length !== invoice.items.length) return false;
+        
+        // Must have same grand total (within a small tolerance)
+        const totalDiff = Math.abs(
+          (pending.data.grand_total || 0) - (invoice.grand_total || 0)
+        );
+        if (totalDiff > 0.01) return false;
+        
+        return true;
+      });
+      
+      if (possibleDuplicates.length > 0) {
+        console.warn('[OfflineStorage] Possible duplicate invoice detected', {
+          existing: possibleDuplicates[0].id,
+          new: invoice.tempId || 'new invoice'
+        });
+        return possibleDuplicates[0].id;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('[OfflineStorage] Error checking for duplicate invoice:', error);
+      return null; // In case of error, allow the invoice to be queued
+    }
   }
 
   /**
@@ -1033,11 +1118,32 @@ export default class OfflineStorage {
       console.log('[OfflineStorage] Cannot process invoices - no actual connectivity');
       return false;
     }
+
+    // First check and clear any stale sync locks (older than 5 minutes)
+    await this.clearStaleSyncLocks(pendingInvoices);
+    
+    // Filter out invoices that are currently being processed 
+    const availableInvoices = pendingInvoices.filter(
+      envelope => !envelope.syncLock || 
+                 new Date(envelope.syncLock) < new Date(Date.now() - 300000) // 5 minutes timeout
+    );
+    
+    if (availableInvoices.length === 0) {
+      console.log('[OfflineStorage] All pending invoices are currently being processed');
+      return true;
+    }
+    
+    console.log(`[OfflineStorage] Found ${availableInvoices.length} available invoices to process`);
     
     // Process each invoice
     const results = await Promise.allSettled(
-      pendingInvoices.map(async (envelope) => {
+      availableInvoices.map(async (envelope) => {
         try {
+          // Set sync lock to prevent concurrent processing
+          const lockTime = new Date().toISOString();
+          envelope.syncLock = lockTime;
+          await this.saveData('pendingInvoices', envelope);
+          
           // Update attempts counter
           envelope.attempts += 1;
           await this.saveData('pendingInvoices', envelope);
@@ -1054,6 +1160,13 @@ export default class OfflineStorage {
           
           const result = await response.json();
           
+          // Check if the invoice is still in the database with our lock
+          const currentEnvelope = await this.getData('pendingInvoices', envelope.id);
+          if (!currentEnvelope || currentEnvelope.syncLock !== lockTime) {
+            console.log(`[OfflineStorage] Invoice ${envelope.id} was processed by another instance`);
+            return { status: 'concurrent_processing', id: envelope.id };
+          }
+          
           if (response.status === 409) {
             // Conflict detected, move to conflicts store
             await this.saveData('conflicts', envelope);
@@ -1069,6 +1182,9 @@ export default class OfflineStorage {
               await this.deleteData('pendingInvoices', envelope.id);
               return { status: 'failed', id: envelope.id, error: result.error };
             }
+            // Clear the sync lock so it can be retried
+            envelope.syncLock = null;
+            await this.saveData('pendingInvoices', envelope);
             return { status: 'retry', id: envelope.id };
           } else {
             // Success
@@ -1080,28 +1196,76 @@ export default class OfflineStorage {
           }
         } catch (error) {
           console.error(`[OfflineStorage] Error processing invoice ${envelope.id}:`, error);
-          if (envelope.attempts >= 3) {
+          
+          // Check if the invoice is still in the database
+          const currentEnvelope = await this.getData('pendingInvoices', envelope.id);
+          if (!currentEnvelope) {
+            console.log(`[OfflineStorage] Invoice ${envelope.id} was already processed`);
+            return { status: 'already_processed', id: envelope.id };
+          }
+          
+          if (currentEnvelope.attempts >= 3) {
             // Move to conflicts after 3 attempts
-            envelope.status = 'failed';
-            envelope.error = error.message;
-            await this.saveData('conflicts', envelope);
+            currentEnvelope.status = 'failed';
+            currentEnvelope.error = error.message;
+            currentEnvelope.syncLock = null; // Clear lock before moving to conflicts
+            await this.saveData('conflicts', currentEnvelope);
             await this.deleteData('pendingInvoices', envelope.id);
             return { status: 'failed', id: envelope.id, error: error.message };
           }
+          
+          // Clear the sync lock so it can be retried
+          currentEnvelope.syncLock = null;
+          await this.saveData('pendingInvoices', currentEnvelope);
           return { status: 'retry', id: envelope.id };
         }
       })
     );
-
-    // Notify about completion
+    
+    // Analyze results
+    const resultSummary = results.reduce((summary, result) => {
+      if (result.status === 'fulfilled') {
+        const status = result.value.status;
+        summary[status] = (summary[status] || 0) + 1;
+      } else {
+        summary.error = (summary.error || 0) + 1;
+      }
+      return summary;
+    }, {});
+    
+    console.log('[OfflineStorage] Processing results:', resultSummary);
+    
+    // Dispatch an event with the results
     window.dispatchEvent(new CustomEvent('pos-awesome-sync-complete', { 
       detail: { 
-        results,
-        timestamp: Date.now()
+        results: resultSummary,
+        timestamp: new Date().toISOString()
       } 
     }));
+    
+    return true;
+  }
 
-    return results;
+  /**
+   * Clear stale sync locks from pending invoices
+   * @param {Array} pendingInvoices List of pending invoices
+   * @returns {Promise} Promise that resolves when locks are cleared
+   */
+  async clearStaleSyncLocks(pendingInvoices) {
+    const staleTime = new Date(Date.now() - 300000).toISOString(); // 5 minutes ago
+    
+    const staleInvoices = pendingInvoices.filter(
+      envelope => envelope.syncLock && envelope.syncLock < staleTime
+    );
+    
+    if (staleInvoices.length > 0) {
+      console.log(`[OfflineStorage] Clearing ${staleInvoices.length} stale sync locks`);
+      
+      await Promise.all(staleInvoices.map(async (envelope) => {
+        envelope.syncLock = null;
+        await this.saveData('pendingInvoices', envelope);
+      }));
+    }
   }
 
   /**

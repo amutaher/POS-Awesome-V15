@@ -520,6 +520,10 @@ export default {
       offlineDataStatus: null, // Status of offline data availability
       lastOfflineInvoiceId: null, // ID of last offline invoice
       unsubscribeNetwork: null, // Unsubscribe function for network detector
+      isSaving: false, // Flag to track if a save operation is in progress
+      lastSavedInvoiceId: null, // Track the ID of the last saved invoice
+      saveConfirmationTimeout: 15000, // Timeout for save confirmation (15 seconds)
+      saveRetryCount: 0, // Counter for save retry attempts
     };
   },
 
@@ -1034,32 +1038,180 @@ export default {
     },
 
     // Save and clear the current invoice (draft logic)
-    save_and_clear_invoice() {
-      const doc = this.get_invoice_doc();
-      if (doc.name) {
-        old_invoice = this.update_invoice(doc);
-      } else {
-        if (doc.items.length) {
-          old_invoice = this.update_invoice(doc);
-        }
-        else {
-          this.eventBus.emit("show_message", {
-            title: `Nothing to save`,
-            color: "error",
-          });
-        }
-      }
-      if (!old_invoice) {
+    async save_and_clear_invoice() {
+      // Check if a save operation is already in progress
+      if (this.isSaving) {
+        console.log("A save operation is already in progress, please wait...");
         this.eventBus.emit("show_message", {
-          title: `Error saving the current invoice`,
-          color: "error",
+          title: __("Save in progress"),
+          color: "warning",
+          message: __("Please wait, a save operation is already in progress...")
         });
-      }
-      else {
-        this.clear_invoice();
-        return old_invoice;
+        return null;
       }
 
+      try {
+        // Set the saving flag to prevent multiple saves
+        this.isSaving = true;
+        this.saveRetryCount = 0;
+        
+        const doc = this.get_invoice_doc();
+        
+        // Return early if there's nothing to save
+        if (!doc || !doc.items || !doc.items.length) {
+          this.eventBus.emit("show_message", {
+            title: __("Nothing to save"),
+            color: "error",
+          });
+          this.isSaving = false;
+          return null;
+        }
+        
+        // Generate a temporary ID if saving a new invoice
+        if (!doc.name) {
+          doc.tempId = this.generateTempId();
+        }
+        
+        let old_invoice = null;
+        
+        // For offline mode, use offlineStorage
+        if (this.isOffline) {
+          try {
+            // Save invoice to offline storage
+            const invoiceId = await this.saveInvoiceOffline();
+            if (invoiceId) {
+              this.lastSavedInvoiceId = invoiceId;
+              this.clear_invoice();
+            }
+            old_invoice = { name: invoiceId }; // Return a simple object with the ID
+          } catch (error) {
+            console.error("Error saving invoice offline:", error);
+            this.eventBus.emit("show_message", {
+              title: __("Error saving invoice offline"),
+              color: "error",
+              message: error.message || "Unknown error"
+            });
+            old_invoice = null;
+          }
+        } else {
+          // Online mode - send to server and wait for confirmation
+          try {
+            // Update existing invoice or create new one
+            old_invoice = await this.update_invoice_with_confirmation(doc);
+            
+            if (old_invoice) {
+              this.lastSavedInvoiceId = old_invoice.name;
+              this.clear_invoice();
+            } else {
+              throw new Error("Failed to save invoice");
+            }
+          } catch (error) {
+            console.error("Error saving invoice:", error);
+            this.eventBus.emit("show_message", {
+              title: __("Error saving invoice"),
+              color: "error",
+              message: error.message || "Unknown error"
+            });
+            old_invoice = null;
+          }
+        }
+        
+        return old_invoice;
+      } finally {
+        // Reset the saving flag regardless of outcome
+        this.isSaving = false;
+      }
+    },
+    
+    // Update invoice with confirmation
+    async update_invoice_with_confirmation(doc) {
+      try {
+        // First update the invoice
+        const updated_doc = await this.update_invoice(doc);
+        
+        if (!updated_doc || !updated_doc.name) {
+          throw new Error("Failed to update invoice");
+        }
+        
+        // For new invoices, verify it was actually saved in the database
+        if (!doc.name && updated_doc.name) {
+          await this.verifyInvoiceSaved(updated_doc.name);
+        }
+        
+        return updated_doc;
+      } catch (error) {
+        console.error("Error in update_invoice_with_confirmation:", error);
+        throw error;
+      }
+    },
+    
+    // Verify that an invoice was actually saved in the database
+    async verifyInvoiceSaved(invoiceName) {
+      try {
+        // Allow a maximum of 3 retries with an increasing delay
+        const MAX_RETRIES = 3;
+        let confirmed = false;
+        let retryCount = 0;
+        
+        while (!confirmed && retryCount < MAX_RETRIES) {
+          // Increase delay for each retry: 2s, 4s, 6s
+          const delay = 2000 * (retryCount + 1);
+          
+          // Wait for a short delay to allow database to update
+          await new Promise(resolve => setTimeout(resolve, delay));
+          
+          // Check if invoice exists in database
+          const result = await this.checkInvoiceExists(invoiceName);
+          
+          if (result.exists) {
+            confirmed = true;
+            break;
+          }
+          
+          retryCount++;
+          console.log(`Invoice verification attempt ${retryCount} failed, retrying...`);
+        }
+        
+        if (!confirmed) {
+          throw new Error(`Could not confirm invoice ${invoiceName} was saved after ${MAX_RETRIES} attempts`);
+        }
+        
+        return true;
+      } catch (error) {
+        console.error("Error verifying invoice save:", error);
+        throw error;
+      }
+    },
+    
+    // Check if an invoice exists in the database
+    async checkInvoiceExists(invoiceName) {
+      return new Promise((resolve, reject) => {
+        frappe.call({
+          method: "posawesome.posawesome.api.posapp.check_invoice_exists",
+          args: {
+            invoice_name: invoiceName
+          },
+          callback: (r) => {
+            if (r.message !== undefined) {
+              resolve({ exists: r.message });
+            } else {
+              resolve({ exists: false });
+            }
+          },
+          error: (err) => {
+            console.error("Error checking invoice existence:", err);
+            // Assume it doesn't exist if there's an error
+            resolve({ exists: false });
+          }
+        });
+      });
+    },
+    
+    // Generate a temporary ID for new invoices
+    generateTempId() {
+      const timestamp = new Date().getTime();
+      const random = Math.floor(Math.random() * 10000);
+      return `temp-${timestamp}-${random}`;
     },
 
     // Start a new order (or return order) with provided data

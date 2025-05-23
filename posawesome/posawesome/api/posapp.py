@@ -2299,12 +2299,35 @@ def validate_return_items(return_against, items):
 
 @frappe.whitelist()
 def get_available_currencies():
-    """Get list of available currencies from ERPNext"""
-    return frappe.get_all("Currency", fields=["name", "currency_name"], 
-                         filters={"enabled": 1}, order_by="currency_name")
+    return frappe.get_list("Currency", pluck="name")
 
-
-
+@frappe.whitelist()
+def check_invoice_exists(invoice_name):
+    """
+    Check if a Sales Invoice exists in the database by name
+    
+    Args:
+        invoice_name (str): The name of the invoice to check
+        
+    Returns:
+        bool: True if the invoice exists, False otherwise
+    """
+    try:
+        # First check if this is a valid invoice name format
+        if not invoice_name or not isinstance(invoice_name, str):
+            return False
+            
+        # Check if the invoice exists using count to be more efficient
+        invoice_count = frappe.db.count('Sales Invoice', {'name': invoice_name})
+        
+        # Log the check for debugging
+        frappe.logger().debug(f"Invoice existence check for {invoice_name}: {'Found' if invoice_count > 0 else 'Not Found'}")
+        
+        return invoice_count > 0
+    except Exception as e:
+        # Log any errors but don't crash
+        frappe.logger().error(f"Error checking invoice existence: {str(e)}")
+        return False
 
 @frappe.whitelist()
 def get_app_info() -> Dict[str, List[Dict[str, str]]]:
