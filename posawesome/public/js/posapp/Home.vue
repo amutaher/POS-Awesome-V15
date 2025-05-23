@@ -77,6 +77,9 @@
       <!-- Data Bootstrap Dialog -->
       <BootstrapDialog ref="bootstrapDialog"></BootstrapDialog>
       
+      <!-- Database Migration Dialog -->
+      <DBMigrationDialog ref="dbMigrationDialog"></DBMigrationDialog>
+      
       <component v-bind:is="page" class="mx-4 md-4" v-if="!bootstrapRequired || bootstrapSkipped"></component>
       <v-card v-else class="mx-4 md-4 pa-5 text-center">
         <v-card-title class="justify-center">Offline Data Not Ready</v-card-title>
@@ -99,6 +102,7 @@ import Navbar from './components/Navbar.vue';
 import POS from './components/pos/Pos.vue';
 import Payments from './components/payments/Pay.vue';
 import BootstrapDialog from './components/bootstrap/BootstrapDialog.vue';
+import DBMigrationDialog from './components/bootstrap/DBMigrationDialog.vue';
 import { registerServiceWorker } from './registerServiceWorker';
 import OfflineStorage from './services/offlineStorage';
 
@@ -123,7 +127,8 @@ export default {
     Navbar,
     POS,
     Payments,
-    BootstrapDialog
+    BootstrapDialog,
+    DBMigrationDialog
   },
   methods: {
     setPage(page) {
@@ -302,7 +307,99 @@ export default {
       } finally {
         this.syncingInProgress = false;
       }
-    }
+    },
+    
+    /**
+     * Setup database event listeners
+     */
+    setupDBEventListeners() {
+      // Listen for database errors/warnings
+      window.addEventListener('pos-awesome-db-error', this.handleDatabaseError);
+      window.addEventListener('pos-awesome-db-warning', this.handleDatabaseWarning);
+      window.addEventListener('pos-awesome-db-reset-approved', this.handleDatabaseReset);
+      window.addEventListener('pos-awesome-db-upgrade-approved', this.handleDatabaseUpgrade);
+    },
+    
+    /**
+     * Handle database error event
+     */
+    handleDatabaseError(event) {
+      console.error('Database error:', event.detail.message);
+      // The dialog component handles this event directly
+    },
+    
+    /**
+     * Handle database warning event
+     */
+    handleDatabaseWarning(event) {
+      console.warn('Database warning:', event.detail.message);
+      // The dialog component handles this event directly
+    },
+    
+    /**
+     * Handle database reset request
+     */
+    async handleDatabaseReset() {
+      console.log('Database reset approved by user');
+      
+      try {
+        // If we have offlineStorage instance, try to reset through it
+        if (this.offlineStorage) {
+          // Reset operation would be custom implemented in offlineStorage
+          await this.offlineStorage.resetDatabase();
+          
+          // Signal completion
+          window.dispatchEvent(new CustomEvent('pos-awesome-db-reset-complete'));
+        } else {
+          // Fallback: Try to delete the database directly
+          const deleteRequest = indexedDB.deleteDatabase('posAwesomeDB');
+          
+          deleteRequest.onsuccess = () => {
+            console.log('Database deleted successfully');
+            window.dispatchEvent(new CustomEvent('pos-awesome-db-reset-complete'));
+          };
+          
+          deleteRequest.onerror = (event) => {
+            console.error('Failed to delete database:', event.target.error);
+            window.dispatchEvent(new CustomEvent('pos-awesome-db-reset-failed', {
+              detail: { error: event.target.error.message }
+            }));
+          };
+        }
+      } catch (error) {
+        console.error('Error resetting database:', error);
+        window.dispatchEvent(new CustomEvent('pos-awesome-db-reset-failed', {
+          detail: { error: error.message }
+        }));
+      }
+    },
+    
+    /**
+     * Handle database upgrade request
+     */
+    async handleDatabaseUpgrade(event) {
+      console.log('Database upgrade approved by user');
+      
+      try {
+        // If we have offlineStorage instance, try to handle upgrade
+        if (this.offlineStorage && this.offlineStorage.handleUpgrade) {
+          await this.offlineStorage.handleUpgrade(event.detail.version);
+          
+          // Signal completion
+          window.dispatchEvent(new CustomEvent('pos-awesome-db-upgrade-complete'));
+        } else {
+          // If no upgrade method, signal failure
+          window.dispatchEvent(new CustomEvent('pos-awesome-db-upgrade-failed', {
+            detail: { error: 'No upgrade handler available' }
+          }));
+        }
+      } catch (error) {
+        console.error('Error upgrading database:', error);
+        window.dispatchEvent(new CustomEvent('pos-awesome-db-upgrade-failed', {
+          detail: { error: error.message }
+        }));
+      }
+    },
   },
   
   async mounted() {
@@ -310,6 +407,10 @@ export default {
       this.remove_frappe_nav();
       this.checkNetworkStatus();
       this.setupPWAInstall();
+      
+      // Setup database event listeners before initializing offlineStorage
+      this.setupDBEventListeners();
+      
       await this.setupOfflineSupport();
       
       // Setup event listeners for bootstrap dialog
@@ -334,6 +435,12 @@ export default {
     window.removeEventListener('pos-awesome-sync-started', this.handleSyncStarted);
     window.removeEventListener('pos-awesome-sync-complete', this.handleSyncCompleted);
     window.removeEventListener('pos-awesome-enable-manual-sync', this.enableManualSync);
+    
+    // Remove database event listeners
+    window.removeEventListener('pos-awesome-db-error', this.handleDatabaseError);
+    window.removeEventListener('pos-awesome-db-warning', this.handleDatabaseWarning);
+    window.removeEventListener('pos-awesome-db-reset-approved', this.handleDatabaseReset);
+    window.removeEventListener('pos-awesome-db-upgrade-approved', this.handleDatabaseUpgrade);
     
     this.eventBus.off('bootstrap_completed');
     this.eventBus.off('bootstrap_skipped');
