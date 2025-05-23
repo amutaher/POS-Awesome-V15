@@ -11,6 +11,16 @@ app_color = "grey"
 app_email = "youssef@totrox.com"
 app_license = "GPLv3"
 
+# Web Server Configuration
+web_include_js = [
+    "/assets/posawesome/js/posapp/service-worker.js"
+]
+
+website_context = {
+    "service_worker": "/posawesome/public/js/posapp/service-worker.js",
+    "service_worker_scope": "/posawesome/"
+}
+
 # Includes in <head>
 # ------------------
 

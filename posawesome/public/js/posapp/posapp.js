@@ -5,6 +5,22 @@ import * as components from 'vuetify/components'
 import * as directives from 'vuetify/directives'
 import Home from './Home.vue';
 
+// Register service worker
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker
+            .register('/posawesome/public/js/posapp/service-worker.js', {
+                scope: '/posawesome/'
+            })
+            .then(registration => {
+                console.log('Service Worker registered successfully:', registration);
+            })
+            .catch(error => {
+                console.error('Service Worker registration failed:', error);
+            });
+    });
+}
+
 // Ensure frappe.PosApp namespace exists
 if (typeof frappe === 'undefined') {
     console.error('Frappe is not defined. Make sure Frappe is loaded before this script.');
