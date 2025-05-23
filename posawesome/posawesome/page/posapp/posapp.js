@@ -35,24 +35,30 @@ frappe.pages['posapp'].on_page_load = function (wrapper) {
 	// Register Service Worker for offline functionality
 	if ('serviceWorker' in navigator) {
 		window.addEventListener('load', () => {
-			navigator.serviceWorker.register('/assets/posawesome/js/posapp/service-worker.js')
+			const swPath = '/assets/posawesome/js/posapp/service-worker.js';
+			navigator.serviceWorker.register(swPath)
 				.then((registration) => {
 					console.log('Service Worker registered with scope:', registration.scope);
 					
 					// Setup periodic sync if available
 					if ('periodicSync' in registration) {
-						// Try to register periodic sync with tag and minimum interval
 						registration.periodicSync.register('sync-pos-data', {
 							minInterval: 24 * 60 * 60 * 1000 // One day in ms
 						}).then(() => {
 							console.log('Periodic sync registered successfully');
 						}).catch((err) => {
-							console.log('Periodic sync registration failed:', err);
+							console.warn('Periodic sync registration failed:', err);
 						});
 					}
 				})
 				.catch((error) => {
 					console.error('Service Worker registration failed:', error);
+					// Show user-friendly error message
+					frappe.msgprint({
+						title: __('Offline Mode Warning'),
+						indicator: 'orange',
+						message: __('Offline mode may not work properly. Please check your internet connection and try refreshing the page.')
+					});
 				});
 				
 			// Initialize global offlineStorage instance if it doesn't exist

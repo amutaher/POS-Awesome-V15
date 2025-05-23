@@ -5,20 +5,19 @@
  */
 
 // Cache names
-const STATIC_CACHE_NAME = 'pos-awesome-static-v1';
+const STATIC_CACHE_NAME = 'posawesome-static-v1';
 const DYNAMIC_CACHE_NAME = 'pos-awesome-dynamic-v1';
 const API_CACHE_NAME = 'pos-awesome-api-v1';
 
 // Resources to cache immediately on install
 const STATIC_RESOURCES = [
-  '/posawesome/public/js/posapp/bundle.js',
-  '/posawesome/public/css/posawesome.css',
-  '/assets/css/frappe-web.min.css',
-  '/assets/js/frappe-web.min.js',
-  '/posawesome/point-of-sale',
-  '/posawesome/public/js/posapp/offline.html',
-  '/posawesome/public/images/pos-loading.gif',
-  '/posawesome/public/images/pos-offline.svg',
+  '/assets/posawesome/js/posapp/',
+  '/assets/posawesome/css/',
+  '/assets/posawesome/icons/',
+  '/assets/posawesome/manifest.json',
+  '/assets/posawesome/node_modules/vuetify/dist/vuetify.min.css',
+  'https://cdn.jsdelivr.net/npm/@mdi/font@6.x/css/materialdesignicons.min.css',
+  'https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900'
 ];
 
 // Default offline page
@@ -51,13 +50,30 @@ self.addEventListener('install', event => {
   
   event.waitUntil(
     caches.open(STATIC_CACHE_NAME)
-      .then(cache => {
+      .then((cache) => {
         console.log('[Service Worker] Caching static resources');
-        return cache.addAll(STATIC_RESOURCES).catch(error => {
-          console.error('[Service Worker] Failed to cache some static resources:', error);
-          // Continue anyway - partial caching is better than none
-          return cache.addAll([OFFLINE_PAGE]);
-        });
+        return Promise.allSettled(
+          STATIC_RESOURCES.map(url => {
+            return fetch(url, { credentials: 'same-origin' })
+              .then(response => {
+                if (!response.ok) {
+                  throw new Error(`Failed to fetch ${url}: ${response.status}`);
+                }
+                return cache.put(url, response);
+              })
+              .catch(error => {
+                console.warn(`[Service Worker] Failed to cache ${url}:`, error);
+                // Continue with other resources even if one fails
+                return Promise.resolve();
+              });
+          })
+        );
+      })
+      .then(() => {
+        console.log('[Service Worker] Static resources cached successfully');
+      })
+      .catch(error => {
+        console.error('[Service Worker] Failed to cache static resources:', error);
       })
   );
 });
@@ -104,27 +120,26 @@ self.addEventListener('activate', event => {
  */
 self.addEventListener('fetch', event => {
   const request = event.request;
-  const url = new URL(request.url);
-
-  // Skip non-GET requests and browser extensions
-  if (request.method !== 'GET' || url.protocol === 'chrome-extension:') {
+  
+  // Skip non-GET requests
+  if (request.method !== 'GET') {
     return;
   }
 
-  // Handle API requests (network-first with cache fallback)
-  if (isApiRequest(request)) {
-    event.respondWith(networkFirstStrategy(request));
-    return;
-  }
-
-  // Handle static resource requests (cache-first with network fallback)
-  if (isStaticResourceRequest(request)) {
+  // Handle static resources with cache-first strategy
+  if (STATIC_RESOURCES.some(url => request.url.includes(url))) {
     event.respondWith(cacheFirstStrategy(request));
     return;
   }
 
-  // For all other requests (dynamic content)
-  event.respondWith(networkWithCacheFallbackStrategy(request));
+  // Handle API requests with network-first strategy
+  if (request.url.includes('/api/')) {
+    event.respondWith(networkFirstStrategy(request));
+    return;
+  }
+
+  // Default to network-first for other requests
+  event.respondWith(networkFirstStrategy(request));
 });
 
 /**
@@ -181,39 +196,35 @@ self.addEventListener('message', event => {
 });
 
 /**
- * Cache-first strategy with network fallback
+ * Cache-first strategy for static resources
  * Used for static resources that rarely change
  */
 async function cacheFirstStrategy(request) {
   try {
     const cachedResponse = await caches.match(request);
-    
     if (cachedResponse) {
-      // If we have a cached response, return it immediately
       return cachedResponse;
     }
-    
-    // Not in cache, try network
-    try {
-      const networkResponse = await fetch(request);
-      
-      // Cache the response if valid
-      if (networkResponse && networkResponse.status === 200) {
-        const cache = await caches.open(STATIC_CACHE_NAME);
-        cache.put(request, networkResponse.clone());
-      }
-      
-      return networkResponse;
-    } catch (error) {
-      // If network fails and we're offline, return offline page
-      if (!isOnline) {
-        return caches.match(OFFLINE_PAGE);
-      }
-      throw error;
+
+    const networkResponse = await fetch(request);
+    if (!networkResponse.ok) {
+      throw new Error(`Network response was not ok: ${networkResponse.status}`);
     }
+
+    const cache = await caches.open(STATIC_CACHE_NAME);
+    await cache.put(request, networkResponse.clone());
+    return networkResponse;
   } catch (error) {
-    console.error('[Service Worker] Cache first strategy failed:', error);
-    return caches.match(OFFLINE_PAGE);
+    console.warn(`[Service Worker] Cache-first strategy failed for ${request.url}:`, error);
+    // Return a fallback response if available
+    const fallbackResponse = await caches.match('/assets/posawesome/offline.html');
+    return fallbackResponse || new Response('Offline content not available', {
+      status: 503,
+      statusText: 'Service Unavailable',
+      headers: new Headers({
+        'Content-Type': 'text/plain'
+      })
+    });
   }
 }
 
