@@ -49,6 +49,7 @@
             v-bind="attrs"
             @click="manualSync"
             :loading="syncingInProgress"
+            :disabled="!canSync"
           >
             Sync Now
           </v-btn>
@@ -72,6 +73,27 @@
         bottom
       >
         {{ syncMessage }}
+      </v-snackbar>
+      
+      <!-- Connection quality warning -->
+      <v-snackbar
+        v-model="poorConnectionSnackbar"
+        color="info"
+        :timeout="5000"
+        fixed
+        bottom
+      >
+        Slow network connection detected. Some operations may be delayed.
+        <template v-slot:action="{ attrs }">
+          <v-btn
+            color="white"
+            text
+            v-bind="attrs"
+            @click="poorConnectionSnackbar = false"
+          >
+            OK
+          </v-btn>
+        </template>
       </v-snackbar>
       
       <!-- Data Bootstrap Dialog -->
@@ -117,10 +139,13 @@ export default {
       syncingInProgress: false,
       syncSnackbar: false,
       syncMessage: '',
+      poorConnectionSnackbar: false,
       offlineStorage: null,
       bootstrapRequired: false,
       bootstrapComplete: false,
-      bootstrapSkipped: false
+      bootstrapSkipped: false,
+      lastNetworkEvent: null,
+      networkCheckInterval: null
     };
   },
   components: {
@@ -129,6 +154,14 @@ export default {
     Payments,
     BootstrapDialog,
     DBMigrationDialog
+  },
+  computed: {
+    /**
+     * Check if sync operation can be performed
+     */
+    canSync() {
+      return navigator.onLine && !this.syncingInProgress;
+    }
   },
   methods: {
     setPage(page) {
@@ -140,17 +173,140 @@ export default {
         $('.navbar.navbar-default.navbar-fixed-top').remove();
       });
     },
+    
+    /**
+     * Set up network status checking
+     */
+    setupNetworkChecking() {
+      // Check initial network status
+      this.checkNetworkStatus();
+      
+      // Set up event listeners for network status changes
+      window.addEventListener('online', this.handleNavigatorOnline);
+      window.addEventListener('offline', this.handleNavigatorOffline);
+      
+      // Listen for network status events from OfflineStorage
+      window.addEventListener('pos-awesome-network-change', this.handleNetworkChange);
+      
+      // Listen for sync events
+      window.addEventListener('pos-awesome-sync-started', this.handleSyncStarted);
+      window.addEventListener('pos-awesome-sync-complete', this.handleSyncCompleted);
+      window.addEventListener('pos-awesome-enable-manual-sync', this.enableManualSync);
+      
+      // Check connection quality if the API is available
+      if (navigator.connection) {
+        navigator.connection.addEventListener('change', this.handleConnectionChange);
+      }
+      
+      // Also check network status when document visibility changes
+      document.addEventListener('visibilitychange', this.handleVisibilityChange);
+      
+      // Set up a periodic check as a fallback
+      this.networkCheckInterval = setInterval(() => {
+        this.checkNetworkStatus();
+      }, 60000); // Check every minute
+    },
+    
+    /**
+     * Check and update network status
+     */
     checkNetworkStatus() {
-      this.offlineSnackbar = !navigator.onLine;
+      const isOnline = navigator.onLine;
+      console.log(`[Home] Checking network status: ${isOnline ? 'Online' : 'Offline'}`);
       
-      // Setup network status listeners
-      window.addEventListener('online', () => {
-        this.offlineSnackbar = false;
-      });
+      // Update UI based on current network status
+      this.offlineSnackbar = !isOnline;
       
-      window.addEventListener('offline', () => {
-        this.offlineSnackbar = true;
-      });
+      // If we're online but recently came online, attempt a sync
+      if (isOnline && this.lastNetworkEvent === 'offline') {
+        console.log('[Home] Recently came online, attempting sync');
+        this.attemptSync();
+      }
+      
+      // Update last network event
+      this.lastNetworkEvent = isOnline ? 'online' : 'offline';
+      
+      return isOnline;
+    },
+    
+    /**
+     * Handle navigator online event
+     */
+    handleNavigatorOnline() {
+      console.log('[Home] Navigator reports online');
+      this.checkNetworkStatus();
+    },
+    
+    /**
+     * Handle navigator offline event
+     */
+    handleNavigatorOffline() {
+      console.log('[Home] Navigator reports offline');
+      this.checkNetworkStatus();
+    },
+    
+    /**
+     * Handle network change event from OfflineStorage
+     */
+    handleNetworkChange(event) {
+      const { isOnline, timestamp } = event.detail;
+      console.log(`[Home] Network change event: ${isOnline ? 'Online' : 'Offline'}`);
+      
+      // Update UI based on network status
+      this.offlineSnackbar = !isOnline;
+      
+      // Update last network event
+      this.lastNetworkEvent = isOnline ? 'online' : 'offline';
+      
+      // If we came back online, attempt a sync
+      if (isOnline && this.offlineStorage) {
+        this.attemptSync();
+      }
+    },
+    
+    /**
+     * Handle connection quality changes
+     */
+    handleConnectionChange() {
+      if (!navigator.connection) return;
+      
+      const effectiveType = navigator.connection.effectiveType; // 2g, 3g, 4g
+      const saveData = navigator.connection.saveData;
+      
+      console.log(`[Home] Connection quality change: ${effectiveType}`);
+      
+      // Show warning for poor connections
+      if (effectiveType === '2g' || effectiveType === 'slow-2g') {
+        this.poorConnectionSnackbar = true;
+      }
+    },
+    
+    /**
+     * Handle document visibility change
+     */
+    handleVisibilityChange() {
+      if (document.visibilityState === 'visible') {
+        console.log('[Home] Document became visible, checking network status');
+        this.checkNetworkStatus();
+      }
+    },
+    
+    /**
+     * Attempt to sync with server if online
+     */
+    attemptSync() {
+      if (!this.offlineStorage || !navigator.onLine || this.syncingInProgress) {
+        return;
+      }
+      
+      console.log('[Home] Attempting automatic sync');
+      this.offlineStorage.triggerSync()
+        .then(result => {
+          console.log('[Home] Auto-sync initiated:', result);
+        })
+        .catch(error => {
+          console.error('[Home] Auto-sync error:', error);
+        });
     },
     
     setupPWAInstall() {
@@ -212,10 +368,8 @@ export default {
         
         console.log('Offline support initialized successfully');
         
-        // Listen for sync events
-        window.addEventListener('pos-awesome-sync-started', this.handleSyncStarted);
-        window.addEventListener('pos-awesome-sync-complete', this.handleSyncCompleted);
-        window.addEventListener('pos-awesome-enable-manual-sync', this.enableManualSync);
+        // Set up network checking
+        this.setupNetworkChecking();
         
         // Check if bootstrap is required
         await this.checkBootstrapRequired();
@@ -290,15 +444,29 @@ export default {
     },
     
     async manualSync() {
-      if (this.syncingInProgress) return;
+      if (this.syncingInProgress || !navigator.onLine) return;
       
       this.syncingInProgress = true;
       
       try {
         if (this.offlineStorage) {
-          await this.offlineStorage.manualSync();
-          this.syncSnackbar = true;
-          this.syncMessage = 'Manual sync completed successfully';
+          const result = await this.offlineStorage.manualSync();
+          
+          if (result.success) {
+            this.syncSnackbar = true;
+            this.syncMessage = 'Manual sync completed successfully';
+          } else {
+            if (result.reason === 'offline') {
+              this.syncSnackbar = true;
+              this.syncMessage = 'Cannot sync while offline';
+            } else if (result.reason === 'no-connectivity') {
+              this.syncSnackbar = true;
+              this.syncMessage = 'No connection to server available';
+            } else {
+              this.syncSnackbar = true;
+              this.syncMessage = `Sync failed: ${result.error || 'Unknown error'}`;
+            }
+          }
         }
       } catch (error) {
         console.error('Manual sync error:', error);
@@ -405,11 +573,11 @@ export default {
   async mounted() {
     this.$nextTick(async function () {
       this.remove_frappe_nav();
-      this.checkNetworkStatus();
-      this.setupPWAInstall();
       
       // Setup database event listeners before initializing offlineStorage
       this.setupDBEventListeners();
+      
+      this.setupPWAInstall();
       
       await this.setupOfflineSupport();
       
@@ -431,10 +599,27 @@ export default {
   },
   
   beforeUnmount() {
-    // Remove event listeners
+    // Remove network event listeners
+    window.removeEventListener('online', this.handleNavigatorOnline);
+    window.removeEventListener('offline', this.handleNavigatorOffline);
+    window.removeEventListener('pos-awesome-network-change', this.handleNetworkChange);
     window.removeEventListener('pos-awesome-sync-started', this.handleSyncStarted);
     window.removeEventListener('pos-awesome-sync-complete', this.handleSyncCompleted);
     window.removeEventListener('pos-awesome-enable-manual-sync', this.enableManualSync);
+    
+    // Remove connection quality listener if available
+    if (navigator.connection) {
+      navigator.connection.removeEventListener('change', this.handleConnectionChange);
+    }
+    
+    // Remove visibility change listener
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    
+    // Clear interval if set
+    if (this.networkCheckInterval) {
+      clearInterval(this.networkCheckInterval);
+      this.networkCheckInterval = null;
+    }
     
     // Remove database event listeners
     window.removeEventListener('pos-awesome-db-error', this.handleDatabaseError);

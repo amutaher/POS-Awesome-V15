@@ -124,7 +124,8 @@ export default {
       isSyncing: false,
       mustReload: false,
       canReset: false,
-      resetConfirmDialog: false
+      resetConfirmDialog: false,
+      networkCheckInterval: null
     };
   },
   
@@ -166,6 +167,13 @@ export default {
         return 'mdi-database';
       }
       return 'mdi-database';
+    },
+    
+    /**
+     * Check if sync is possible
+     */
+    canSync() {
+      return navigator.onLine && !this.isSyncing;
     }
   },
   
@@ -176,6 +184,16 @@ export default {
     
     // Listen for version error events from indexedDB
     window.addEventListener('pos-awesome-db-version-error', this.handleVersionError);
+    
+    // Listen for network status changes
+    window.addEventListener('online', this.handleNetworkChange);
+    window.addEventListener('offline', this.handleNetworkChange);
+    window.addEventListener('pos-awesome-network-change', this.handleNetworkStatusEvent);
+    
+    // Set up periodic network check
+    this.networkCheckInterval = setInterval(() => {
+      this.checkNetworkStatus();
+    }, 30000);
   },
   
   beforeUnmount() {
@@ -183,9 +201,58 @@ export default {
     window.removeEventListener('pos-awesome-db-error', this.handleDatabaseError);
     window.removeEventListener('pos-awesome-db-warning', this.handleDatabaseWarning);
     window.removeEventListener('pos-awesome-db-version-error', this.handleVersionError);
+    
+    // Clean up network listeners
+    window.removeEventListener('online', this.handleNetworkChange);
+    window.removeEventListener('offline', this.handleNetworkChange);
+    window.removeEventListener('pos-awesome-network-change', this.handleNetworkStatusEvent);
+    
+    // Clear interval
+    if (this.networkCheckInterval) {
+      clearInterval(this.networkCheckInterval);
+      this.networkCheckInterval = null;
+    }
   },
   
   methods: {
+    /**
+     * Check current network status
+     */
+    checkNetworkStatus() {
+      const isOnline = navigator.onLine;
+      
+      // If we're online and have pending sync operations
+      if (isOnline && this.pendingInvoices > 0 && this.dialog && !this.isSyncing) {
+        // Suggest syncing data
+        this.currentWarning = 'Network connection restored. You can now sync your pending invoices.';
+        this.currentError = null;
+      }
+      
+      return isOnline;
+    },
+    
+    /**
+     * Handle direct network status changes
+     */
+    handleNetworkChange() {
+      this.checkNetworkStatus();
+    },
+    
+    /**
+     * Handle network status change event from OfflineStorage
+     */
+    handleNetworkStatusEvent(event) {
+      const { isOnline } = event.detail;
+      
+      // If we're offline and currently syncing
+      if (!isOnline && this.isSyncing) {
+        this.isSyncing = false;
+        this.currentError = 'Network connection lost during sync. Please try again when online.';
+      }
+      
+      this.checkNetworkStatus();
+    },
+    
     /**
      * Handle database error events
      */
@@ -407,6 +474,12 @@ export default {
      * Sync pending data
      */
     async syncData() {
+      // Check if we're online
+      if (!navigator.onLine) {
+        this.currentError = 'Cannot sync while offline. Please check your internet connection.';
+        return;
+      }
+      
       if (!window.offlineStorage) {
         this.currentError = 'Offline storage not initialized';
         return;
@@ -415,14 +488,37 @@ export default {
       this.isSyncing = true;
       
       try {
-        const result = await window.offlineStorage.manualSync();
-        console.log('[DBMigrationDialog] Sync result:', result);
+        // Verify actual connectivity first
+        if (window.offlineStorage.testActualConnectivity) {
+          const isConnected = await window.offlineStorage.testActualConnectivity();
+          if (!isConnected) {
+            throw new Error('No connection to server available');
+          }
+        }
+        
+        // Use manualSync for better error handling if available
+        if (window.offlineStorage.manualSync) {
+          const result = await window.offlineStorage.manualSync();
+          
+          if (!result.success) {
+            throw new Error(result.error || result.reason || 'Unknown sync error');
+          }
+        } else {
+          // Fall back to old method if manualSync not implemented
+          const result = await window.offlineStorage.processPendingInvoices();
+          console.log('[DBMigrationDialog] Sync result:', result);
+        }
         
         // Refresh pending invoice count
-        this.pendingInvoices = 0;
+        const pendingData = await window.offlineStorage.getPendingInvoices();
+        this.pendingInvoices = pendingData ? pendingData.length : 0;
         
-        this.currentWarning = 'Data synchronized successfully. You can now proceed with the database upgrade.';
-        this.currentError = null;
+        if (this.pendingInvoices === 0) {
+          this.currentWarning = 'All data synchronized successfully. You can now proceed with the database upgrade.';
+          this.currentError = null;
+        } else {
+          this.currentWarning = `Sync completed with ${this.pendingInvoices} remaining unsynchronized invoices. Please try again.`;
+        }
       } catch (error) {
         console.error('[DBMigrationDialog] Sync failed:', error);
         this.currentError = `Sync failed: ${error.message}`;
@@ -444,6 +540,9 @@ export default {
       this.canReset = options.canReset !== undefined ? options.canReset : true;
       
       this.dialog = true;
+      
+      // Check network status immediately
+      this.checkNetworkStatus();
     }
   }
 };

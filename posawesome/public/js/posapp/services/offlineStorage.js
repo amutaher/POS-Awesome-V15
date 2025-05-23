@@ -97,7 +97,9 @@ export default class OfflineStorage {
   constructor(dbName = 'posAwesomeDB') {
     this.dbName = dbName;
     this.db = null;
-    this.isOnline = navigator.onLine;
+    this.networkEventListeners = [];
+    this.lastOnlineCheckTime = 0;
+    this.networkCheckInterval = null;
     this.migrationErrors = [];
     this.migrationWarnings = [];
     this.migrationInProgress = false;
@@ -105,9 +107,11 @@ export default class OfflineStorage {
     // Setup the ready promise that can be awaited by the app
     this.ready = this.init();
     
-    // Listen for online/offline events
-    window.addEventListener('online', this.handleOnlineStatusChange.bind(this));
-    window.addEventListener('offline', this.handleOnlineStatusChange.bind(this));
+    // Setup all network status event listeners
+    this.setupNetworkListeners();
+    
+    // Set up network status polling as fallback
+    this.startNetworkStatusPolling();
     
     // Listen for sync messages from service worker
     if (navigator.serviceWorker && navigator.serviceWorker.controller) {
@@ -116,16 +120,161 @@ export default class OfflineStorage {
   }
 
   /**
-   * Handle online/offline status changes
+   * Setup all network-related event listeners
    */
-  handleOnlineStatusChange() {
-    this.isOnline = navigator.onLine;
+  setupNetworkListeners() {
+    // Standard network events
+    const onlineHandler = this.handleNetworkChange.bind(this, true);
+    const offlineHandler = this.handleNetworkChange.bind(this, false);
     
-    if (this.isOnline) {
+    window.addEventListener('online', onlineHandler);
+    window.addEventListener('offline', offlineHandler);
+    
+    // Store event listeners for cleanup
+    this.networkEventListeners.push(
+      { event: 'online', handler: onlineHandler },
+      { event: 'offline', handler: offlineHandler }
+    );
+    
+    // Additional events that might signal connection changes
+    if (navigator.connection) {
+      const connectionChangeHandler = this.handleConnectionChange.bind(this);
+      navigator.connection.addEventListener('change', connectionChangeHandler);
+      this.networkEventListeners.push(
+        { event: 'change', target: navigator.connection, handler: connectionChangeHandler }
+      );
+    }
+    
+    // Handle visibility change which might affect connection state
+    const visibilityChangeHandler = this.handleVisibilityChange.bind(this);
+    document.addEventListener('visibilitychange', visibilityChangeHandler);
+    this.networkEventListeners.push(
+      { event: 'visibilitychange', target: document, handler: visibilityChangeHandler }
+    );
+  }
+  
+  /**
+   * Start polling network status as a fallback mechanism
+   */
+  startNetworkStatusPolling() {
+    // Clear any existing interval
+    if (this.networkCheckInterval) {
+      clearInterval(this.networkCheckInterval);
+    }
+    
+    // Check network status every 30 seconds
+    this.networkCheckInterval = setInterval(() => {
+      this.checkNetworkStatus();
+    }, 30000); // 30 seconds
+  }
+  
+  /**
+   * Check current network status and dispatch events if needed
+   */
+  checkNetworkStatus() {
+    const isCurrentlyOnline = navigator.onLine;
+    const now = Date.now();
+    
+    // Only update if it's been more than 5 seconds since last check
+    if (now - this.lastOnlineCheckTime > 5000) {
+      this.lastOnlineCheckTime = now;
+      
+      // If online, try to actually check connectivity by making a tiny request
+      if (isCurrentlyOnline) {
+        this.testActualConnectivity()
+          .then(isReallyConnected => {
+            if (!isReallyConnected) {
+              console.log('[OfflineStorage] Navigator reports online but no actual connectivity');
+              // If we can't reach the server, treat as offline even if navigator says online
+              this.handleNetworkChange(false);
+            }
+          })
+          .catch(err => {
+            console.warn('[OfflineStorage] Error checking connectivity:', err);
+          });
+      }
+    }
+  }
+  
+  /**
+   * Test actual server connectivity beyond just navigator.onLine
+   * Makes a minimal request to server to verify true connectivity
+   * @returns {Promise<boolean>} True if server is reachable
+   */
+  async testActualConnectivity() {
+    try {
+      // Try to fetch a small resource from the server with cache busting
+      const cacheBuster = Date.now();
+      const response = await fetch(`/api/method/ping?_=${cacheBuster}`, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        // Short timeout to avoid waiting too long
+        signal: AbortSignal.timeout(3000)
+      });
+      
+      return response.ok;
+    } catch (error) {
+      console.warn('[OfflineStorage] Connectivity test failed:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Handle network status changes
+   * @param {boolean} isOnline Whether the network is now online
+   */
+  handleNetworkChange(isOnline) {
+    // Always double-check with navigator.onLine
+    const actuallyOnline = isOnline && navigator.onLine;
+    
+    console.log(`[OfflineStorage] Network status change: ${actuallyOnline ? 'Online' : 'Offline'}`);
+    this.lastOnlineCheckTime = Date.now();
+    
+    // Dispatch an event for other components to react to
+    window.dispatchEvent(new CustomEvent('pos-awesome-network-change', { 
+      detail: { 
+        isOnline: actuallyOnline,
+        timestamp: this.lastOnlineCheckTime
+      } 
+    }));
+    
+    // If we're online, attempt to sync
+    if (actuallyOnline) {
       console.log('[OfflineStorage] Back online, attempting to sync data');
       this.triggerSync();
     } else {
       console.log('[OfflineStorage] Device is offline, data will be stored locally');
+    }
+  }
+  
+  /**
+   * Handle network connection changes (if navigator.connection is available)
+   */
+  handleConnectionChange() {
+    if (!navigator.connection) return;
+    
+    // Check if we have a connection and its properties have changed
+    const connType = navigator.connection.type;
+    const isConnected = connType !== 'none' && navigator.onLine;
+    
+    console.log(`[OfflineStorage] Connection change detected: ${connType}, Online: ${isConnected}`);
+    
+    // The effective type gives a better indication of connection quality
+    const effectiveType = navigator.connection.effectiveType; // 2g, 3g, 4g
+    console.log(`[OfflineStorage] Connection effective type: ${effectiveType}`);
+    
+    // Handle the change just like a regular online/offline event
+    this.handleNetworkChange(isConnected);
+  }
+  
+  /**
+   * Handle visibility change events which might affect network status
+   */
+  handleVisibilityChange() {
+    if (document.visibilityState === 'visible') {
+      console.log('[OfflineStorage] Document became visible, checking network status');
+      // Re-check network status when document becomes visible again
+      this.checkNetworkStatus();
     }
   }
   
@@ -827,6 +976,12 @@ export default class OfflineStorage {
   async triggerSync() {
     await this.ready;
     
+    // Always check if we're online before attempting to sync
+    if (!navigator.onLine) {
+      console.log('[OfflineStorage] Cannot sync - device is offline');
+      return false;
+    }
+    
     if (navigator.serviceWorker && navigator.serviceWorker.controller) {
       if ('sync' in navigator.serviceWorker.controller) {
         try {
@@ -834,7 +989,8 @@ export default class OfflineStorage {
           await navigator.serviceWorker.controller.sync.register('sync-pending-invoices');
           return true;
         } catch (error) {
-          console.error('Failed to register sync:', error);
+          console.error('[OfflineStorage] Failed to register sync:', error);
+          // Try to sync directly if background sync fails
           this.processPendingInvoices();
           return false;
         }
@@ -854,19 +1010,29 @@ export default class OfflineStorage {
   async processPendingInvoices() {
     await this.ready;
     
-    if (!this.isOnline) {
-      console.log('Cannot process invoices while offline');
+    // Always check current online status before attempting to sync
+    if (!navigator.onLine) {
+      console.log('[OfflineStorage] Cannot process invoices while offline');
       return false;
     }
 
     const pendingInvoices = await this.getPendingInvoices();
     
     if (!pendingInvoices || pendingInvoices.length === 0) {
-      console.log('No pending invoices to process');
+      console.log('[OfflineStorage] No pending invoices to process');
       return true;
     }
 
-    console.log(`Processing ${pendingInvoices.length} pending invoices`);
+    console.log(`[OfflineStorage] Processing ${pendingInvoices.length} pending invoices`);
+    
+    // Double-check connectivity before processing
+    const isConnected = await this.testActualConnectivity()
+      .catch(() => false);
+    
+    if (!isConnected) {
+      console.log('[OfflineStorage] Cannot process invoices - no actual connectivity');
+      return false;
+    }
     
     // Process each invoice
     const results = await Promise.allSettled(
@@ -913,7 +1079,7 @@ export default class OfflineStorage {
             return { status: 'success', id: envelope.id };
           }
         } catch (error) {
-          console.error(`Error processing invoice ${envelope.id}:`, error);
+          console.error(`[OfflineStorage] Error processing invoice ${envelope.id}:`, error);
           if (envelope.attempts >= 3) {
             // Move to conflicts after 3 attempts
             envelope.status = 'failed';
@@ -927,76 +1093,41 @@ export default class OfflineStorage {
       })
     );
 
+    // Notify about completion
+    window.dispatchEvent(new CustomEvent('pos-awesome-sync-complete', { 
+      detail: { 
+        results,
+        timestamp: Date.now()
+      } 
+    }));
+
     return results;
   }
 
   /**
-   * Resolve a conflict by either retrying or discarding
-   * @param {string} id The ID of the conflict
-   * @param {string} action Either 'retry' or 'discard'
-   * @returns {Promise<Object>} Result of the resolution
+   * Get current network status
+   * @returns {boolean} True if device is online
    */
-  async resolveConflict(id, action) {
-    await this.ready;
-    
-    const conflict = await this.getData('conflicts', id);
-    if (!conflict) {
-      return { status: 'error', message: 'Conflict not found' };
-    }
-    
-    if (action === 'retry') {
-      // Move back to pending invoices
-      conflict.attempts = 0;
-      conflict.status = 'pending';
-      await this.saveData('pendingInvoices', conflict);
-      await this.deleteData('conflicts', id);
-      await this.triggerSync();
-      return { status: 'retrying', id };
-    } else if (action === 'discard') {
-      // Delete the conflict
-      await this.deleteData('conflicts', id);
-      return { status: 'discarded', id };
-    }
-    
-    return { status: 'error', message: 'Invalid action' };
-  }
-
-  /**
-   * Check if required offline data is available
-   * @returns {Promise<Object>} Status of offline data availability
-   */
-  async checkOfflineDataAvailability() {
-    await this.ready;
-    
-    const items = await this.getAllData('items');
-    const customers = await this.getAllData('customers');
-    const posProfile = await this.getAllData('posProfile');
-    
-    return {
-      itemsAvailable: items && items.length > 0,
-      customersAvailable: customers && customers.length > 0,
-      posProfileAvailable: posProfile && posProfile.length > 0,
-      offlineReady: 
-        (items && items.length > 0) && 
-        (customers && customers.length > 0) && 
-        (posProfile && posProfile.length > 0)
-    };
-  }
-
-  /**
-   * Manual sync trigger for browsers without Background Sync
-   * @returns {Promise} Promise that resolves when sync completes
-   */
-  async manualSync() {
-    return this.processPendingInvoices();
+  isOnline() {
+    // Always get the latest network status
+    return navigator.onLine;
   }
 
   /**
    * Destroy the database connection
    */
   destroy() {
-    window.removeEventListener('online', this.handleOnlineStatusChange);
-    window.removeEventListener('offline', this.handleOnlineStatusChange);
+    // Remove all network event listeners
+    this.networkEventListeners.forEach(listener => {
+      const target = listener.target || window;
+      target.removeEventListener(listener.event, listener.handler);
+    });
+    
+    // Clear network status polling interval
+    if (this.networkCheckInterval) {
+      clearInterval(this.networkCheckInterval);
+      this.networkCheckInterval = null;
+    }
     
     if (navigator.serviceWorker && navigator.serviceWorker.controller) {
       navigator.serviceWorker.removeEventListener('message', this.handleServiceWorkerMessage);
@@ -1241,5 +1372,94 @@ export default class OfflineStorage {
     }
     
     return results;
+  }
+
+  /**
+   * Resolve a conflict by either retrying or discarding
+   * @param {string} id The ID of the conflict
+   * @param {string} action Either 'retry' or 'discard'
+   * @returns {Promise<Object>} Result of the resolution
+   */
+  async resolveConflict(id, action) {
+    await this.ready;
+    
+    const conflict = await this.getData('conflicts', id);
+    if (!conflict) {
+      return { status: 'error', message: 'Conflict not found' };
+    }
+    
+    // Always check if we're online before attempting to sync
+    if (action === 'retry' && !navigator.onLine) {
+      return { status: 'error', message: 'Cannot retry while offline' };
+    }
+    
+    if (action === 'retry') {
+      // Move back to pending invoices
+      conflict.attempts = 0;
+      conflict.status = 'pending';
+      await this.saveData('pendingInvoices', conflict);
+      await this.deleteData('conflicts', id);
+      await this.triggerSync();
+      return { status: 'retrying', id };
+    } else if (action === 'discard') {
+      // Delete the conflict
+      await this.deleteData('conflicts', id);
+      return { status: 'discarded', id };
+    }
+    
+    return { status: 'error', message: 'Invalid action' };
+  }
+  
+  /**
+   * Check if required offline data is available
+   * @returns {Promise<Object>} Status of offline data availability
+   */
+  async checkOfflineDataAvailability() {
+    await this.ready;
+    
+    const items = await this.getAllData('items');
+    const customers = await this.getAllData('customers');
+    const posProfile = await this.getAllData('posProfile');
+    const taxes = await this.getAllData('taxes');
+    
+    return {
+      itemsAvailable: items && items.length > 0,
+      customersAvailable: customers && customers.length > 0,
+      posProfileAvailable: posProfile && posProfile.length > 0,
+      taxesAvailable: taxes && taxes.length > 0,
+      offlineReady: 
+        (items && items.length > 0) && 
+        (customers && customers.length > 0) && 
+        (posProfile && posProfile.length > 0) &&
+        (taxes && taxes.length > 0)
+    };
+  }
+  
+  /**
+   * Manual sync trigger for browsers without Background Sync
+   * @returns {Promise} Promise that resolves when sync completes
+   */
+  async manualSync() {
+    // Always check current online status before attempting to sync
+    if (!navigator.onLine) {
+      console.log('[OfflineStorage] Cannot sync manually while offline');
+      return { success: false, reason: 'offline' };
+    }
+    
+    try {
+      // Check actual connectivity
+      const isConnected = await this.testActualConnectivity();
+      if (!isConnected) {
+        console.log('[OfflineStorage] Cannot sync manually - no actual connectivity');
+        return { success: false, reason: 'no-connectivity' };
+      }
+      
+      // Process pending invoices
+      const result = await this.processPendingInvoices();
+      return { success: true, result };
+    } catch (error) {
+      console.error('[OfflineStorage] Manual sync error:', error);
+      return { success: false, error: error.message };
+    }
   }
 } 
