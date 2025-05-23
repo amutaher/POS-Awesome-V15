@@ -963,133 +963,98 @@ export default {
       this.submit_invoice(print);
     },
     // Submit invoice to backend after all validations
-    submit_invoice(print) {
-      // For return invoices, ensure payments are negative one last time
-      if (this.invoice_doc.is_return) {
-        this.ensureReturnPaymentsAreNegative();
-      }
-      let totalPayedAmount = 0;
-      this.invoice_doc.payments.forEach((payment) => {
-        payment.amount = this.flt(payment.amount);
-        totalPayedAmount += payment.amount;
-      });
-      if (this.invoice_doc.is_return && totalPayedAmount === 0) {
-        this.invoice_doc.is_pos = 0;
-      }
-      if (this.customer_credit_dict.length) {
-        this.customer_credit_dict.forEach((row) => {
-          row.credit_to_redeem = this.flt(row.credit_to_redeem);
-        });
-      }
-      let data = {
-        total_change: !this.invoice_doc.is_return ? -this.diff_payment : 0,
-        paid_change: !this.invoice_doc.is_return ? this.paid_change : 0,
-        credit_change: -this.credit_change,
-        redeemed_customer_credit: this.redeemed_customer_credit,
-        customer_credit_dict: this.customer_credit_dict,
-        is_cashback: this.is_cashback,
-      };
+    submit_invoice(print = false, skip_validation = false) {
       const vm = this;
+      
+      // Validate before submitting
+      if (!skip_validation && !this.validate_invoice()) {
+        return;
+      }
+
+      // Show loading state
+      this.eventBus.emit("freeze", { title: __("Submitting invoice...") });
+
+      // Prepare invoice data
+      let formData = { ...this.invoice_doc };
+      formData["total_change"] = !this.invoice_doc.is_return ? -this.diff_payment : 0;
+      formData["paid_change"] = !this.invoice_doc.is_return ? this.paid_change : 0;
+      formData["credit_change"] = -this.credit_change;
+      formData["redeemed_customer_credit"] = this.redeemed_customer_credit;
+      formData["customer_credit_dict"] = this.customer_credit_dict;
+      formData["is_cashback"] = this.is_cashback;
+
+      // Submit invoice
       frappe.call({
         method: "posawesome.posawesome.api.posapp.submit_invoice",
-        args: {
-          data: data,
-          invoice: this.invoice_doc,
-        },
-        callback: function (r) {
-          if (r.exc) {
-            console.error("Error submitting invoice:", r.exc);
-            // Show detailed error message to help debugging
-            let errorMsg = r.exc.toString();
-            if (errorMsg.includes("Amount must be negative")) {
-              vm.eventBus.emit("show_message", {
-                title: __("Fixing payment amounts for return invoice..."),
-                color: "warning",
-              });
-              // Force fix the amounts
-              vm.invoice_doc.payments.forEach((payment) => {
-                if (payment.amount > 0) {
-                  payment.amount = -Math.abs(payment.amount);
-                }
-                if (payment.base_amount > 0) {
-                  payment.base_amount = -Math.abs(payment.base_amount);
-                }
-              });
-              // Retry submission once
-              console.log("Retrying submission with fixed payment amounts");
-              setTimeout(() => {
-                vm.submit_invoice(print);
-              }, 500);
-            } else {
-              vm.eventBus.emit("show_message", {
-                title: __("Error submitting invoice: ") + errorMsg,
-                color: "error",
-              });
-            }
-            return;
-          }
-          if (!r.message) {
+        args: { data: formData },
+        callback: function(r) {
+          // Unfreeze UI
+          vm.eventBus.emit("unfreeze");
+          
+          if (!r || !r.message) {
+            console.error("Empty response from server");
             vm.eventBus.emit("show_message", {
-              title: __("Error submitting invoice: No response from server"),
-              color: "error",
+              title: __("Empty response from server"),
+              color: "error"
             });
             return;
           }
-          
-          // Make sure we handle print before any data reset
-          if (print) {
-            vm.load_print_page();
-          }
-          
-          // Store invoice name for reference
-          const invoiceName = r.message.name;
-          
-          // Reset data in proper order to avoid errors
-          vm.customer_credit_dict = [];
-          vm.redeem_customer_credit = false;
-          vm.is_cashback = true;
-          vm.sales_person = "";
-          vm.addresses = [];
-          
-          // Now emit events with proper data
+
           try {
-            // First set last invoice reference
-            vm.eventBus.emit("set_last_invoice", invoiceName);
+            // Store invoice name for reference
+            const invoiceName = r.message.name;
             
-            // Emit payment success event with invoice data
+            // Reset data in proper order to avoid errors
+            vm.customer_credit_dict = [];
+            vm.redeem_customer_credit = false;
+            vm.is_cashback = true;
+            vm.sales_person = "";
+            vm.addresses = [];
+            
+            // Handle print if requested
+            if (print) {
+              vm.load_print_page();
+            }
+            
+            // Emit events with proper data
+            vm.eventBus.emit("set_last_invoice", invoiceName);
             vm.eventBus.emit("payment_success", {
               invoice_name: invoiceName,
               invoice_doc: r.message
             });
             
-            // Show success message - Invoice component will also show message
+            // Show success message
             vm.eventBus.emit("show_message", {
               title: __("Invoice {0} is Submitted", [invoiceName]),
-              color: "success",
+              color: "success"
             });
             
-            // Play sound
+            // Play success sound
             frappe.utils.play_sound("submit");
             
             // Clear invoice data and reset date
             vm.eventBus.emit("clear_invoice");
             vm.eventBus.emit("reset_posting_date");
             
-            // Finally return to invoice view
+            // Return to invoice view
             vm.back_to_invoice();
+            
           } catch (error) {
-            console.error("Error handling success response", error);
+            console.error("Error handling success response:", error);
             vm.eventBus.emit("show_message", {
               title: __("Error processing invoice submission: ") + error.message,
-              color: "error",
+              color: "error"
             });
           }
         },
         error: function(error) {
+          // Unfreeze UI
+          vm.eventBus.emit("unfreeze");
+          
           console.error("Error in submit_invoice:", error);
           vm.eventBus.emit("show_message", {
             title: __("Error submitting invoice: ") + (error.message || "Unknown error"),
-            color: "error",
+            color: "error"
           });
         }
       });
