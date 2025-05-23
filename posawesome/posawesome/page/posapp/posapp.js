@@ -53,7 +53,6 @@ frappe.pages['posapp'].on_page_load = function (wrapper) {
 				})
 				.catch((error) => {
 					console.error('Service Worker registration failed:', error);
-					// Show user-friendly error message
 					frappe.msgprint({
 						title: __('Offline Mode Warning'),
 						indicator: 'orange',
@@ -62,18 +61,26 @@ frappe.pages['posapp'].on_page_load = function (wrapper) {
 				});
 				
 			// Initialize global offlineStorage instance if it doesn't exist
-			// This will be available to all Vue components
 			if (!window.offlineStorage) {
 				import('/assets/posawesome/js/posapp/services/offlineStorage.js')
 					.then((module) => {
+						if (!module || !module.default) {
+							throw new Error('Invalid offline storage module');
+						}
 						const OfflineStorage = module.default;
 						window.offlineStorage = new OfflineStorage('posAwesomeDB', 1);
-						window.offlineStorage.init().catch(err => {
-							console.error('Failed to initialize offline storage:', err);
-						});
+						return window.offlineStorage.init();
+					})
+					.then(() => {
+						console.log('Offline storage initialized successfully');
 					})
 					.catch(err => {
-						console.error('Failed to load offline storage module:', err);
+						console.error('Failed to initialize offline storage:', err);
+						frappe.msgprint({
+							title: __('Offline Storage Error'),
+							indicator: 'red',
+							message: __('Failed to initialize offline storage. Some features may not work properly.')
+						});
 					});
 			}
 			
