@@ -1083,7 +1083,18 @@ export default {
             vm.back_to_invoice();
           } catch (error) {
             console.error("Error handling success response", error);
+            vm.eventBus.emit("show_message", {
+              title: __("Error processing invoice submission: ") + error.message,
+              color: "error",
+            });
           }
+        },
+        error: function(error) {
+          console.error("Error in submit_invoice:", error);
+          vm.eventBus.emit("show_message", {
+            title: __("Error submitting invoice: ") + (error.message || "Unknown error"),
+            color: "error",
+          });
         }
       });
     },
