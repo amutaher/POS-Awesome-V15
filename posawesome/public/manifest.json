@@ -2,7 +2,7 @@
   "name": "POS Awesome",
   "short_name": "POS App",
   "description": "A Point of Sale system for ERPNext",
-  "start_url": "/posawesome/point-of-sale",
+  "start_url": "/app/posapp",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#0097A7",
@@ -10,92 +10,58 @@
     {
       "src": "icons/icon-72x72.png",
       "sizes": "72x72",
-      "type": "image/png",
-      "purpose": "any"
+      "type": "image/png"
     },
     {
       "src": "icons/icon-96x96.png",
       "sizes": "96x96",
-      "type": "image/png",
-      "purpose": "any"
+      "type": "image/png"
     },
     {
       "src": "icons/icon-128x128.png",
       "sizes": "128x128",
-      "type": "image/png",
-      "purpose": "any"
+      "type": "image/png"
     },
     {
       "src": "icons/icon-144x144.png",
       "sizes": "144x144",
-      "type": "image/png",
-      "purpose": "any"
+      "type": "image/png"
     },
     {
       "src": "icons/icon-152x152.png",
       "sizes": "152x152",
-      "type": "image/png",
-      "purpose": "any"
+      "type": "image/png"
     },
     {
       "src": "icons/icon-192x192.png",
       "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
+      "type": "image/png"
     },
     {
       "src": "icons/icon-384x384.png",
       "sizes": "384x384",
-      "type": "image/png",
-      "purpose": "any"
+      "type": "image/png"
     },
     {
       "src": "icons/icon-512x512.png",
       "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
+      "type": "image/png"
     }
   ],
   "splash_pages": null,
   "screenshots": [
     {
-      "src": "images/screenshot-desktop.png",
+      "src": "images/screenshot-desktop.png.png",
       "sizes": "1280x720",
-      "type": "image/png",
-      "form_factor": "wide",
-      "label": "Desktop view of POS Awesome"
+      "type": "image/png"
     },
     {
-      "src": "images/screenshot-mobile.png",
+      "src": "images/screenshot-mobile.png.png",
       "sizes": "750x1334",
-      "type": "image/png",
-      "form_factor": "narrow",
-      "label": "Mobile view of POS Awesome"
+      "type": "image/png"
     }
   ],
   "id": "posawesome",
-  "scope": "/posawesome/",
-  "orientation": "any",
-  "categories": ["business", "finance", "productivity"],
-  "lang": "en",
-  "dir": "ltr",
-  "prefer_related_applications": false,
-  "related_applications": [],
-  "iarc_rating_id": "",
-  "shortcuts": [
-    {
-      "name": "New Sale",
-      "short_name": "Sale",
-      "description": "Start a new POS sale",
-      "url": "/posawesome/point-of-sale?new=1",
-      "icons": [{ "src": "icons/icon-96x96.png", "sizes": "96x96" }]
-    },
-    {
-      "name": "Sales History",
-      "short_name": "History",
-      "description": "View sales history",
-      "url": "/posawesome/point-of-sale?view=history",
-      "icons": [{ "src": "icons/icon-96x96.png", "sizes": "96x96" }]
-    }
-  ]
+  "scope": "/",
+  "orientation": "any"
 } 

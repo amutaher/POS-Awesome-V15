@@ -27,7 +27,7 @@
     <!-- Main Invoice Card (contains all invoice content) -->
     <v-card style="max-height: 70vh; height: 70vh"
       :class="['cards my-0 py-0 mt-3 bg-grey-lighten-5', { 'return-mode': invoiceType === 'Return' }, { 'offline-mode': isOffline }]">
-      <!-- Offline Mode Indicator -->
+      <!-- Offline Mode Indicator - Only shown when offline -->
       <v-alert
         v-if="isOffline"
         density="compact"
@@ -4661,41 +4661,6 @@ export default {
     generateUniqueId() {
       return `${Date.now()}-${Math.random().toString(36).substring(2, 15)}-${Math.random().toString(36).substring(2, 15)}`;
     },
-
-    updateOnlineStatus() {
-      this.isOffline = !navigator.onLine;
-    },
-
-    async processPendingInvoices() {
-      if (!navigator.onLine) return;
-      
-      const pendingInvoices = JSON.parse(localStorage.getItem('pendingInvoices') || '[]');
-      if (!pendingInvoices.length) return;
-      
-      for (const pendingInvoice of pendingInvoices) {
-        try {
-          await frappe.call({
-            method: 'posawesome.posawesome.api.posapp.submit_invoice',
-            args: { invoice: pendingInvoice.invoice },
-          });
-          
-          const remainingInvoices = pendingInvoices.filter(
-            inv => inv.timestamp !== pendingInvoice.timestamp
-          );
-          localStorage.setItem('pendingInvoices', JSON.stringify(remainingInvoices));
-          
-          frappe.show_alert({
-            message: __('Offline invoice submitted successfully'),
-            indicator: 'green'
-          });
-        } catch (error) {
-          frappe.show_alert({
-            message: __('Failed to submit offline invoice: ') + error.message,
-            indicator: 'red'
-          });
-        }
-      }
-    }
   },
 
   mounted() {
@@ -4819,11 +4784,6 @@ export default {
     
     // Initialize offline storage reference
     this.initOfflineStorage();
-
-    // Add offline detection
-    window.addEventListener('online', this.updateOnlineStatus);
-    window.addEventListener('offline', this.updateOnlineStatus);
-    this.updateOnlineStatus();
   },
   // Cleanup event listeners before component is destroyed
   beforeUnmount() {
@@ -4842,10 +4802,6 @@ export default {
     if (this.unsubscribeNetwork) {
       this.unsubscribeNetwork();
     }
-
-    // Remove event listeners
-    window.removeEventListener('online', this.updateOnlineStatus);
-    window.removeEventListener('offline', this.updateOnlineStatus);
   },
   // Register global keyboard shortcuts when component is created
   created() {
@@ -4938,12 +4894,6 @@ export default {
       },
       immediate: true
     },
-    isOffline(newValue, oldValue) {
-      if (!newValue && oldValue) {
-        // Connection restored, process pending invoices
-        this.processPendingInvoices();
-      }
-    }
   },
 };
 
@@ -5048,7 +4998,7 @@ export default {
 
 /* Amber border and label for offline mode card */
 .offline-mode {
-  border: 2px solid orange !important;
+  border: 2px solid #ffc107 !important;
   position: relative;
 }
 
@@ -5058,7 +5008,7 @@ export default {
   position: absolute;
   top: 0;
   right: 0;
-  background-color: orange;
+  background-color: #ffc107;
   color: #212121;
   padding: 4px 12px;
   font-weight: bold;

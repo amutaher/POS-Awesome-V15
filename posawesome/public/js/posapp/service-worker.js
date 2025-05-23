@@ -39,88 +39,25 @@ let isOnline = true;
 let lastOnlineTime = Date.now();
 let networkStatusInterval;
 
-// Track failed cache attempts for retry
-let failedCacheAttempts = new Set();
-const MAX_RETRY_ATTEMPTS = 3;
-let retryCount = 0;
-
-/**
- * Cache resources in smaller chunks to avoid timeout issues
- */
-async function cacheInChunks(cache, resources, chunkSize = 3) {
-  const chunks = [];
-  for (let i = 0; i < resources.length; i += chunkSize) {
-    chunks.push(resources.slice(i, i + chunkSize));
-  }
-
-  const results = {
-    success: [],
-    failed: []
-  };
-
-  for (const chunk of chunks) {
-    try {
-      await cache.addAll(chunk);
-      results.success.push(...chunk);
-    } catch (error) {
-      console.error('[Service Worker] Failed to cache chunk:', error);
-      results.failed.push(...chunk);
-      // Add failed resources to retry set
-      chunk.forEach(resource => failedCacheAttempts.add(resource));
-    }
-  }
-
-  return results;
-}
-
-/**
- * Retry caching failed resources
- */
-async function retryFailedResources(cache) {
-  if (failedCacheAttempts.size === 0 || retryCount >= MAX_RETRY_ATTEMPTS) {
-    return;
-  }
-
-  console.log('[Service Worker] Retrying failed resources...');
-  const failedResources = Array.from(failedCacheAttempts);
-  failedCacheAttempts.clear();
-  
-  const results = await cacheInChunks(cache, failedResources);
-  retryCount++;
-
-  if (results.failed.length > 0) {
-    // Schedule retry after delay
-    setTimeout(() => retryFailedResources(cache), 5000);
-  }
-}
-
 /**
  * Service Worker Install Event
- * Cache static resources and offline page with improved error handling
+ * Cache static resources and offline page
  */
 self.addEventListener('install', event => {
   console.log('[Service Worker] Installing...');
   
+  // Skip waiting to activate immediately
+  self.skipWaiting();
+  
   event.waitUntil(
     caches.open(STATIC_CACHE_NAME)
-      .then(async cache => {
+      .then(cache => {
         console.log('[Service Worker] Caching static resources');
-        
-        // First ensure offline page is cached
-        await cache.add(OFFLINE_PAGE).catch(error => {
-          console.error('[Service Worker] Failed to cache offline page:', error);
+        return cache.addAll(STATIC_RESOURCES).catch(error => {
+          console.error('[Service Worker] Failed to cache some static resources:', error);
+          // Continue anyway - partial caching is better than none
+          return cache.addAll([OFFLINE_PAGE]);
         });
-
-        // Cache other resources in chunks
-        const results = await cacheInChunks(cache, STATIC_RESOURCES);
-        
-        if (results.failed.length > 0) {
-          console.warn('[Service Worker] Some resources failed to cache:', results.failed);
-          // Trigger retry mechanism
-          setTimeout(() => retryFailedResources(cache), 3000);
-        }
-
-        return self.skipWaiting();
       })
   );
 });
