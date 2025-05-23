@@ -390,7 +390,7 @@ export default class OfflineStorage {
         } else {
           // Handle other errors
           this.showMigrationError(`IndexedDB error: ${event.target.error.message}`);
-          reject(event.target.error);
+        reject(event.target.error);
         }
       };
 
@@ -403,7 +403,7 @@ export default class OfflineStorage {
             .then(() => {
               console.log('[OfflineStorage] IndexedDB initialized successfully after migration');
               this.migrationInProgress = false;
-              resolve(this.db);
+        resolve(this.db);
             })
             .catch(error => {
               console.error('[OfflineStorage] Migration verification failed:', error);
@@ -615,8 +615,8 @@ export default class OfflineStorage {
             db.close();
             reject(event.target.error);
           };
-        };
-      });
+      };
+    });
     } catch (error) {
       console.error('[OfflineStorage] Error checking pending data:', error);
       return { hasPendingInvoices: false }; // Assume no pending data in case of error
@@ -735,17 +735,17 @@ export default class OfflineStorage {
           throw new Error(`Object store '${storeName}' does not exist`);
         }
         
-        const transaction = this.db.transaction([storeName], 'readwrite');
-        const store = transaction.objectStore(storeName);
+      const transaction = this.db.transaction([storeName], 'readwrite');
+      const store = transaction.objectStore(storeName);
         
         // Add metadata to track when this record was last modified
         if (typeof data === 'object' && data !== null) {
           data._lastModified = new Date().toISOString();
         }
         
-        const request = store.put(data);
+      const request = store.put(data);
 
-        request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => resolve(request.result);
         request.onerror = () => {
           console.error(`[OfflineStorage] Error saving data to '${storeName}':`, request.error);
           reject(request.error);
@@ -787,36 +787,36 @@ export default class OfflineStorage {
           throw new Error(`Object store '${storeName}' does not exist`);
         }
         
-        const transaction = this.db.transaction([storeName], 'readwrite');
-        const store = transaction.objectStore(storeName);
-        
-        let completed = 0;
+      const transaction = this.db.transaction([storeName], 'readwrite');
+      const store = transaction.objectStore(storeName);
+      
+      let completed = 0;
         let successful = 0;
         const errors = [];
         const results = [];
         const now = new Date().toISOString();
 
-        items.forEach(item => {
+      items.forEach(item => {
           // Add metadata to track when this record was last modified
           if (typeof item === 'object' && item !== null) {
             item._lastModified = now;
           }
           
-          const request = store.put(item);
-          
-          request.onsuccess = () => {
-            completed++;
+        const request = store.put(item);
+        
+        request.onsuccess = () => {
+          completed++;
             successful++;
             results.push({ success: true, key: request.result });
             
-            if (completed === items.length) {
+          if (completed === items.length) {
               finishTransaction();
             }
           };
           
           request.onerror = (event) => {
             console.error(`[OfflineStorage] Error saving item in '${storeName}':`, request.error);
-            completed++;
+          completed++;
             errors.push({ 
               error: request.error,
               item
@@ -826,7 +826,7 @@ export default class OfflineStorage {
             // Prevent the error from aborting the transaction
             event.preventDefault();
             
-            if (completed === items.length) {
+          if (completed === items.length) {
               finishTransaction();
             }
           };
@@ -844,8 +844,8 @@ export default class OfflineStorage {
               resolve(results);
             } else {
               // If all items failed
-              reject(errors);
-            }
+            reject(errors);
+          }
           } else {
             // All items succeeded
             resolve(results);
@@ -1461,7 +1461,7 @@ export default class OfflineStorage {
           }
           
           try {
-            const result = await response.json();
+          const result = await response.json();
             
             // Check for CSRF error in the response
             if (result.exc_type === 'CSRFTokenError' || 
@@ -1484,12 +1484,12 @@ export default class OfflineStorage {
               await this.handleAuthError(envelope, result.exc_type, result.message || 'Permission denied');
               return { status: 'auth_error', id: envelope.id, code: result.exc_type };
             }
-            
-            if (response.status === 409) {
-              // Conflict detected, move to conflicts store
-              await this.saveData('conflicts', envelope);
-              await this.deleteData('pendingInvoices', envelope.id);
-              return { status: 'conflict', id: envelope.id };
+          
+          if (response.status === 409) {
+            // Conflict detected, move to conflicts store
+            await this.saveData('conflicts', envelope);
+            await this.deleteData('pendingInvoices', envelope.id);
+            return { status: 'conflict', id: envelope.id };
             } else if (result.exc_type === 'PermissionError') {
               // Permission error - move to conflicts
               envelope.status = 'permission_denied';
@@ -1504,14 +1504,14 @@ export default class OfflineStorage {
               await this.deleteData('pendingInvoices', envelope.id);
               return { status: 'duplicate', id: envelope.id };
             } else if (result.error || result.exc_type) {
-              // Server error
+            // Server error
               const errorMessage = result.error || result.exception || result.message || 'Unknown server error';
-              if (envelope.attempts >= 3) {
-                // Move to conflicts after 3 attempts
-                envelope.status = 'failed';
+            if (envelope.attempts >= 3) {
+              // Move to conflicts after 3 attempts
+              envelope.status = 'failed';
                 envelope.error = errorMessage;
-                await this.saveData('conflicts', envelope);
-                await this.deleteData('pendingInvoices', envelope.id);
+              await this.saveData('conflicts', envelope);
+              await this.deleteData('pendingInvoices', envelope.id);
                 return { status: 'failed', id: envelope.id, error: errorMessage };
               }
               // Clear the sync lock so it can be retried
@@ -1519,9 +1519,9 @@ export default class OfflineStorage {
               envelope.lastError = errorMessage;
               await this.saveData('pendingInvoices', envelope);
               return { status: 'retry', id: envelope.id, error: errorMessage };
-            } else {
-              // Success
-              await this.deleteData('pendingInvoices', envelope.id);
+          } else {
+            // Success
+            await this.deleteData('pendingInvoices', envelope.id);
               if (result.message && result.message.name) {
                 // Save the server response invoice data
                 try {
@@ -1582,7 +1582,7 @@ export default class OfflineStorage {
         }
       })
     );
-    
+
     // Analyze results
     const resultSummary = results.reduce((summary, result) => {
       if (result.status === 'fulfilled') {

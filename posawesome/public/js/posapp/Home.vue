@@ -110,6 +110,13 @@
         @dismissed="handleAuthDialogDismissed"
       ></AuthErrorDialog>
       
+      <!-- Schema Error Dialog -->
+      <SchemaErrorDialog 
+        v-if="schemaErrorActive"
+        @dismissed="handleSchemaErrorDismissed"
+        @retry="handleSchemaErrorRetry"
+      ></SchemaErrorDialog>
+      
       <component v-bind:is="page" class="mx-4 md-4" v-if="!bootstrapRequired || bootstrapSkipped"></component>
       <v-card v-else class="mx-4 md-4 pa-5 text-center">
         <v-card-title class="justify-center">Offline Data Not Ready</v-card-title>
@@ -134,6 +141,7 @@ import Payments from './components/payments/Pay.vue';
 import BootstrapDialog from './components/bootstrap/BootstrapDialog.vue';
 import DBMigrationDialog from './components/bootstrap/DBMigrationDialog.vue';
 import AuthErrorDialog from './components/pos/AuthErrorDialog.vue';
+import SchemaErrorDialog from './components/pos/SchemaErrorDialog.vue';
 import { 
   registerServiceWorker, 
   initServiceWorkerMessaging, 
@@ -142,8 +150,10 @@ import {
   isBackgroundSyncSupported
 } from './registerServiceWorker';
 import OfflineStorage from './services/offlineStorage';
+import apiService from './services/apiService';
 
 export default {
+  name: "posawesome-home",
   data: function () {
     return {
       page: 'POS',
@@ -166,7 +176,9 @@ export default {
       serviceWorkerInitialized: false,
       isPWA: false,
       hasBackgroundSync: false,
-      authErrorActive: false
+      authErrorActive: false,
+      schemaErrorActive: false,
+      apiInitialized: false
     };
   },
   components: {
@@ -175,7 +187,8 @@ export default {
     Payments,
     BootstrapDialog,
     DBMigrationDialog,
-    AuthErrorDialog
+    AuthErrorDialog,
+    SchemaErrorDialog
   },
   computed: {
     /**
@@ -533,7 +546,7 @@ export default {
         this.appInitialized = true;
         
         // If we're online, attempt an initial sync
-        if (navigator.onLine) {
+          if (navigator.onLine) {
           setTimeout(() => {
             this.attemptSync();
           }, 5000); // Wait 5 seconds after initialization
@@ -761,8 +774,8 @@ export default {
           const result = await this.offlineStorage.manualSync();
           
           if (result.success) {
-            this.syncSnackbar = true;
-            this.syncMessage = 'Manual sync completed successfully';
+        this.syncSnackbar = true;
+        this.syncMessage = 'Manual sync completed successfully';
           } else {
             if (result.reason === 'offline') {
               this.syncSnackbar = true;
@@ -931,6 +944,41 @@ export default {
         }
       }, 1000);
     },
+
+    // Initialize API service
+    async initializeApiService() {
+      try {
+        await apiService.initialize();
+        this.apiInitialized = true;
+        frappe.show_alert({
+          message: __('API service initialized successfully'),
+          indicator: 'green'
+        }, 3);
+      } catch (error) {
+        console.error('[Home] API service initialization failed:', error);
+        frappe.show_alert({
+          message: __('API initialization failed. Some features may not work correctly.'),
+          indicator: 'red'
+        }, 5);
+      }
+    },
+
+    // Handle schema validation errors
+    handleSchemaError(error) {
+      this.schemaErrorActive = true;
+      console.warn('[Home] Schema validation error:', error);
+    },
+
+    // Handle schema error dismissal
+    handleSchemaErrorDismissed() {
+      this.schemaErrorActive = false;
+    },
+
+    // Handle retrying after schema error
+    handleSchemaErrorRetry() {
+      this.schemaErrorActive = false;
+      // Additional retry logic can be added here
+    }
   },
   
   async mounted() {
@@ -1002,6 +1050,19 @@ export default {
     this.eventBus.off('bootstrap_completed');
     this.eventBus.off('bootstrap_skipped');
     this.eventBus.off('open_bootstrap_dialog');
+  },
+  
+  created() {
+    // Register event listeners
+    window.addEventListener('pos-awesome-db-error', this.handleDBError);
+    window.addEventListener('pos-awesome-db-migration-needed', this.handleDBMigration);
+    window.addEventListener('pos-awesome-schema-error', this.handleSchemaError);
+    
+    // Check browser capabilities
+    this.checkPWACapabilities();
+    
+    // Initialize API service
+    this.initializeApiService();
   }
 };
 </script>

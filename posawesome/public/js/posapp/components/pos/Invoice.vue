@@ -452,6 +452,7 @@
 import format from "../../format";
 import Customer from "./Customer.vue";
 import networkDetector from '../../services/networkDetector';
+import apiService from '../../services/apiService';
 
 export default {
   mixins: [format],
@@ -4513,67 +4514,152 @@ export default {
           }
           
           // Check stock availability if not a return invoice
-          if (!this.invoice_doc.is_return && this.pos_profile.update_stock) {
-            // Skip validation for free/offer items
-            if (!item.posa_is_offer && !item.is_free_item) {
-              // If warehouse is specified and item tracks stock
-              if (item.warehouse && !item.has_serial_no && !item.has_batch_no) {
-                if (item.actual_qty < item.qty) {
-                  errors.push(__(`Item #${itemPosition}: Insufficient stock for ${item.item_code} in ${item.warehouse}. Available: ${item.actual_qty}, Required: ${item.qty}`));
-                }
-              }
-              
-              // Check batch stock if using batch
-              if (item.has_batch_no && item.batch_no) {
-                if (item.actual_batch_qty < item.qty) {
-                  errors.push(__(`Item #${itemPosition}: Insufficient batch stock for ${item.item_code} in batch ${item.batch_no}. Available: ${item.actual_batch_qty}, Required: ${item.qty}`));
-                }
-              }
-              
-              // Check if serial numbers are properly selected
-              if (item.has_serial_no && item.serial_no_selected) {
-                if (item.serial_no_selected.length < Math.abs(item.qty)) {
-                  errors.push(__(`Item #${itemPosition}: Please select ${Math.abs(item.qty)} serial numbers for ${item.item_code}. Currently selected: ${item.serial_no_selected.length}`));
-                }
-              }
-            }
-          }
-          
-          // If return and original invoice referenced, validate return quantity doesn't exceed original
-          if (this.invoice_doc.is_return && this.invoice_doc.return_against && this.return_doc) {
-            const original_items = this.return_doc.items || [];
-            const original_item = original_items.find(orig => orig.item_code === item.item_code);
-            
-            if (original_item && Math.abs(item.qty) > original_item.qty) {
-              errors.push(__(`Item #${itemPosition}: Return quantity (${Math.abs(item.qty)}) exceeds original quantity (${original_item.qty})`));
-            }
+          if (item.qty > 0 && this.invoiceType !== 'Return' && this.warehouse && item.stock_qty > item.actual_qty) {
+            errors.push(__(`Item #${itemPosition}: Insufficient stock. Available: ${item.actual_qty}, Required: ${item.stock_qty}`));
           }
         });
       }
       
-      // Validate tax settings if using custom taxes
-      if (this.pos_profile.posa_use_custom_taxes) {
-        // Ensure tax account is set (if required by POS profile)
-        const tax_account = this.pos_profile.posa_tax_account;
-        if (!tax_account) {
-          errors.push(__('Tax account is not configured in POS Profile'));
-        }
-      }
-      
-      // Additional validation for specific invoice types
-      if (this.invoiceType === 'Order') {
-        // Validate delivery date is set for items in Sales Order
-        const itemsMissingDeliveryDate = this.items.filter(
-          item => !item.posa_delivery_date
-        );
-        
-        if (itemsMissingDeliveryDate.length > 0) {
-          const missingItems = itemsMissingDeliveryDate.map(item => item.item_code).join(', ');
-          errors.push(__(`Delivery date is required for items: ${missingItems}`));
-        }
-      }
-      
       return errors;
+    },
+    async submit_invoice() {
+      try {
+        this.submitting_invoice = true;
+        
+        // Use the new validation function
+        const validationErrors = this.validateInvoiceFields();
+        if (validationErrors.length > 0) {
+          console.error('Submit validation errors:', validationErrors);
+          this.eventBus.emit('show_message', {
+            title: __('Invoice Validation Failed'),
+            message: validationErrors.join('\n'),
+            color: 'error'
+          });
+          this.submitting_invoice = false;
+          return;
+        }
+        
+        const invoice_doc = this.process_invoice();
+        if (!invoice_doc) {
+          this.submitting_invoice = false;
+          return;
+        }
+        
+        let additional_args = {};
+        if (this.customer_credit_dict.length > 0) {
+          let credit_to_redeem = 0;
+          for (const row of this.customer_credit_dict) {
+            if (row.credit_to_redeem) {
+              credit_to_redeem += row.credit_to_redeem;
+            }
+          }
+          additional_args['customer_credit_dict'] = this.customer_credit_dict;
+          additional_args['redeemed_customer_credit'] = credit_to_redeem;
+        }
+        
+        if (this.credit_change) {
+          additional_args['credit_change'] = this.credit_change;
+        }
+        
+        if (this.due_date) {
+          additional_args['due_date'] = this.due_date;
+        }
+        
+        // Add device metadata for traceability
+        additional_args['metadata'] = {
+          deviceId: window.clientId || 'unknown',
+          envelopeId: this.generateUniqueId(),
+          tempId: invoice_doc.tempId || this.tempId || null,
+          appVersion: apiService.apiVersion || '1.0.0'
+        };
+        
+        // Generate idempotency key
+        const idempotencyKey = `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+        
+        // Use apiService instead of frappe.call
+        console.log('Submitting invoice with API service');
+        const result = await apiService.submitInvoice(invoice_doc, additional_args, idempotencyKey);
+        
+        // Handle API response (could be success or error)
+        if (result.error) {
+          // Error was already handled by apiService for schema errors
+          console.error('Invoice submission error:', result.error);
+          this.eventBus.emit('show_message', {
+            title: __(result.error.message || 'Error submitting invoice'),
+            color: 'error'
+          });
+          this.submitting_invoice = false;
+          return;
+        }
+        
+        // Success response
+        if (result.message) {
+          const invoiceResult = result.message;
+          console.log('Invoice submitted successfully:', invoiceResult);
+          
+          // API version check
+          if (invoiceResult.api_version && invoiceResult.api_version !== apiService.apiVersion) {
+            console.warn(`API version mismatch: client=${apiService.apiVersion}, server=${invoiceResult.api_version}`);
+          }
+          
+          if (invoiceResult.status === 'error') {
+            this.eventBus.emit('show_message', {
+              title: __(invoiceResult.message || 'Error submitting invoice'),
+              color: 'error'
+            });
+            this.submitting_invoice = false;
+            return;
+          }
+          
+          // Handle different submission states
+          if (invoiceResult.status === 'enqueued') {
+            this.eventBus.emit('show_message', {
+              title: __('Invoice has been queued for processing'),
+              color: 'success'
+            });
+          } else if (invoiceResult.already_exists) {
+            this.eventBus.emit('show_message', {
+              title: __('Invoice already exists'),
+              color: 'info'
+            });
+          } else {
+            // Regular success
+            this.eventBus.emit('show_message', {
+              title: __('Invoice Created'),
+              message: invoiceResult.name,
+              color: 'success'
+            });
+          }
+          
+          // Clean up and reset
+          this.invoice_doc = {};
+          this.close_payments();
+          this.reset();
+          this.submitting_invoice = false;
+          return invoiceResult;
+        } else {
+          console.error('Empty response from server');
+          this.eventBus.emit('show_message', {
+            title: __('Empty response from server'),
+            color: 'error'
+          });
+          this.submitting_invoice = false;
+          return null;
+        }
+      } catch (error) {
+        console.error('Error in submit_invoice:', error);
+        this.eventBus.emit('show_message', {
+          title: __(error.message || 'Error submitting invoice'),
+          color: 'error'
+        });
+        this.submitting_invoice = false;
+        return null;
+      }
+    },
+
+    // Generate a unique ID for request tracing
+    generateUniqueId() {
+      return `${Date.now()}-${Math.random().toString(36).substring(2, 15)}-${Math.random().toString(36).substring(2, 15)}`;
     },
   },
 

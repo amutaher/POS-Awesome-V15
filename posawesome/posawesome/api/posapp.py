@@ -5,7 +5,7 @@
 from __future__ import unicode_literals
 import json
 import frappe
-from frappe.utils import nowdate, flt, cstr, getdate, cint, money_in_words
+from frappe.utils import nowdate, flt, cstr, getdate, cint, money_in_words, now_datetime
 from erpnext.setup.utils import get_exchange_rate
 from frappe import _
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import get_bank_cash_account
@@ -33,6 +33,112 @@ from posawesome.posawesome.doctype.delivery_charges.delivery_charges import (
 from frappe.utils.caching import redis_cache
 from typing import List, Dict
 
+# Current API version - increment this when making breaking changes
+API_VERSION = "1.0.0"
+
+# Schema definitions for validation
+INVOICE_SCHEMA = {
+    "required": ["customer", "items", "pos_profile", "company"],
+    "properties": {
+        "customer": {"type": "string", "minLength": 1},
+        "items": {
+            "type": "array", 
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": ["item_code", "qty", "rate"],
+                "properties": {
+                    "item_code": {"type": "string", "minLength": 1},
+                    "qty": {"type": "number", "not": {"enum": [0]}},
+                    "rate": {"type": "number", "minimum": 0}
+                }
+            }
+        },
+        "pos_profile": {"type": "string", "minLength": 1},
+        "company": {"type": "string", "minLength": 1}
+    }
+}
+
+ADDITIONAL_DATA_SCHEMA = {
+    "properties": {
+        "redeemed_customer_credit": {"type": "number"},
+        "customer_credit_dict": {"type": "array"},
+        "credit_change": {"type": "number"},
+        "due_date": {"type": "string"},
+        "metadata": {
+            "type": "object",
+            "properties": {
+                "deviceId": {"type": "string"},
+                "envelopeId": {"type": "string"},
+                "tempId": {"type": "string"},
+                "appVersion": {"type": "string"}
+            }
+        }
+    }
+}
+
+def validate_schema(data, schema, path=""):
+    """
+    Validate data against a JSON schema
+    
+    Args:
+        data: The data to validate
+        schema: The schema to validate against
+        path: The current path for error messages
+        
+    Returns:
+        list: Empty list if valid, or list of error messages
+    """
+    errors = []
+    
+    # Check type
+    if schema.get("type") == "object" and not isinstance(data, dict):
+        errors.append(f"{path}: Expected object, got {type(data).__name__}")
+        return errors
+    elif schema.get("type") == "array" and not isinstance(data, list):
+        errors.append(f"{path}: Expected array, got {type(data).__name__}")
+        return errors
+    elif schema.get("type") == "string" and not isinstance(data, str):
+        errors.append(f"{path}: Expected string, got {type(data).__name__}")
+    elif schema.get("type") == "number" and not isinstance(data, (int, float)):
+        errors.append(f"{path}: Expected number, got {type(data).__name__}")
+    
+    # Check minimum length for strings
+    if schema.get("type") == "string" and schema.get("minLength") and len(data) < schema.get("minLength"):
+        errors.append(f"{path}: Must be at least {schema.get('minLength')} characters")
+    
+    # Check minimum value for numbers
+    if schema.get("type") == "number" and schema.get("minimum") is not None and data < schema.get("minimum"):
+        errors.append(f"{path}: Must be at least {schema.get('minimum')}")
+
+    # Check not equal to specific values
+    if schema.get("not") and schema.get("not").get("enum") and data in schema.get("not").get("enum"):
+        errors.append(f"{path}: Cannot be one of {schema.get('not').get('enum')}")
+    
+    # Check required fields
+    if schema.get("type") == "object" and schema.get("required"):
+        for field in schema.get("required"):
+            if field not in data or data[field] is None:
+                errors.append(f"{path}.{field}: Required field missing")
+    
+    # Check array items
+    if schema.get("type") == "array" and schema.get("items") and data:
+        min_items = schema.get("minItems", 0)
+        if len(data) < min_items:
+            errors.append(f"{path}: Must have at least {min_items} item(s)")
+        
+        for i, item in enumerate(data):
+            item_errors = validate_schema(item, schema.get("items"), f"{path}[{i}]")
+            errors.extend(item_errors)
+    
+    # Recurse into properties for objects
+    if schema.get("type") == "object" and schema.get("properties") and isinstance(data, dict):
+        for prop, prop_schema in schema.get("properties").items():
+            if prop in data and data[prop] is not None:
+                prop_errors = validate_schema(data[prop], prop_schema, f"{path}.{prop}")
+                errors.extend(prop_errors)
+    
+    return errors
 
 @frappe.whitelist()
 def get_opening_dialog_data():
@@ -648,8 +754,27 @@ def submit_invoice(invoice, data):
     # Get the idempotency key from the header
     idempotency_key = frappe.request.headers.get('Idempotency-Key')
     
+    # Get the client API version from the header
+    client_api_version = frappe.request.headers.get('X-API-Version')
+    
     # Add logging for debugging
-    frappe.logger().info(f"Submit invoice request received with idempotency key: {idempotency_key}")
+    frappe.logger().info(f"Submit invoice request received with idempotency key: {idempotency_key}, API version: {client_api_version}")
+    
+    # Check API version compatibility
+    if client_api_version and client_api_version != API_VERSION:
+        frappe.logger().warning(f"API version mismatch: client={client_api_version}, server={API_VERSION}")
+        
+        # For older clients send a clear message
+        return {
+            "status": "error",
+            "code": "API_VERSION_MISMATCH",
+            "api_version": {
+                "client": client_api_version,
+                "server": API_VERSION,
+                "compatible": False
+            },
+            "message": f"The client API version ({client_api_version}) is different from the server version ({API_VERSION}). Please update your application."
+        }
     
     if idempotency_key:
         # Check if we've already processed this request
@@ -661,8 +786,45 @@ def submit_invoice(invoice, data):
     
     try:
         # Parse the inputs
-        invoice_data = json.loads(invoice)
-        additional_data = json.loads(data)
+        try:
+            invoice_data = json.loads(invoice)
+            additional_data = json.loads(data)
+        except json.JSONDecodeError as e:
+            frappe.logger().error(f"JSON parse error: {str(e)}")
+            return {
+                "status": "error",
+                "code": "INVALID_JSON",
+                "message": f"Invalid JSON format: {str(e)}"
+            }
+        
+        # Validate schema
+        invoice_errors = validate_schema(invoice_data, INVOICE_SCHEMA, "invoice")
+        data_errors = validate_schema(additional_data, ADDITIONAL_DATA_SCHEMA, "data")
+        
+        # If there are validation errors, return them
+        if invoice_errors or data_errors:
+            all_errors = invoice_errors + data_errors
+            error_response = {
+                "status": "error",
+                "code": "SCHEMA_VALIDATION_FAILED",
+                "message": "The request data does not match the expected schema",
+                "errors": all_errors,
+                "details": {
+                    "invoice_errors": invoice_errors,
+                    "data_errors": data_errors
+                }
+            }
+            
+            # Cache validation errors for idempotency
+            if idempotency_key:
+                frappe.cache().set_value(
+                    f"posa_idempotent_{idempotency_key}",
+                    error_response,
+                    expires_in_sec=86400  # 24 hours
+                )
+            
+            frappe.logger().error(f"Schema validation failed: {json.dumps(all_errors)}")
+            return error_response
         
         # Check for invoice name
         if invoice_data.get("name"):
@@ -786,7 +948,7 @@ def submit_invoice(invoice, data):
                     is_payment_entry = 1
 
         payments = invoice_doc.payments
-
+        
         # if frappe.get_value("POS Profile", invoice_doc.pos_profile, "posa_auto_set_batch"):
         #     set_batch_nos(invoice_doc, "warehouse", throw=True)
         set_batch_nos_for_bundels(invoice_doc, "warehouse", throw=True)
@@ -794,7 +956,32 @@ def submit_invoice(invoice, data):
         invoice_doc.flags.ignore_permissions = True
         frappe.flags.ignore_account_permission = True
         invoice_doc.posa_is_printed = 1
-        invoice_doc.save()
+        
+        # Wrap save operation in try-except to catch validation errors
+        try:
+            invoice_doc.save()
+        except Exception as validation_error:
+            # Capture and format validation errors from the server
+            error_response = {
+                "status": "error",
+                "code": "SERVER_VALIDATION_FAILED",
+                "message": str(validation_error),
+                "details": {
+                    "error_type": type(validation_error).__name__,
+                    "traceback": frappe.get_traceback()
+                }
+            }
+            
+            # Cache validation errors for idempotency
+            if idempotency_key:
+                frappe.cache().set_value(
+                    f"posa_idempotent_{idempotency_key}",
+                    error_response,
+                    expires_in_sec=86400  # 24 hours
+                )
+            
+            frappe.logger().error(f"Server validation failed: {str(validation_error)}")
+            return error_response
 
         if additional_data.get("due_date"):
             frappe.db.set_value(
@@ -833,53 +1020,85 @@ def submit_invoice(invoice, data):
                         "cash_account": cash_account,
                         "payments": payments,
                         "idempotency_key": idempotency_key,
-                    },
+                    }
                 )
+            result = {
+                "name": invoice_doc.name,
+                "status": "enqueued"
+            }
         else:
+            # Submit the invoice immediately
             try:
                 invoice_doc.submit()
-                redeeming_customer_credit(
-                    invoice_doc, additional_data, is_payment_entry, total_cash, cash_account, payments
-                )
-            except Exception as e:
-                frappe.logger().error(f"Error submitting invoice {invoice_doc.name}: {str(e)}")
-                if idempotency_key:
-                    # Cache the error result for idempotency
-                    error_result = {
-                        "name": invoice_doc.name, 
-                        "status": "error",
-                        "error": str(e)
+            except Exception as submit_error:
+                # Handle submission errors
+                error_response = {
+                    "status": "error",
+                    "code": "SUBMIT_FAILED",
+                    "message": str(submit_error),
+                    "details": {
+                        "error_type": type(submit_error).__name__,
+                        "traceback": frappe.get_traceback()
                     }
+                }
+                
+                # Cache submission errors for idempotency
+                if idempotency_key:
                     frappe.cache().set_value(
-                        f"posa_idempotent_{idempotency_key}", 
-                        error_result,
+                        f"posa_idempotent_{idempotency_key}",
+                        error_response,
                         expires_in_sec=86400  # 24 hours
                     )
-                raise e
-
-        result = {"name": invoice_doc.name, "status": invoice_doc.docstatus}
+                
+                frappe.logger().error(f"Invoice submission failed: {str(submit_error)}")
+                return error_response
+            
+            # Process customer credit redemption
+            redeeming_customer_credit(
+                invoice_doc, additional_data, is_payment_entry, total_cash, cash_account, payments
+            )
+            result = {
+                "name": invoice_doc.name,
+                "status": "submitted",
+                "docstatus": invoice_doc.docstatus,
+                "grand_total": invoice_doc.grand_total
+            }
         
-        # Store the result for idempotency
+        # Add API version to the response
+        result["api_version"] = API_VERSION
+        
+        # Cache the result for idempotency
         if idempotency_key:
             frappe.cache().set_value(
-                f"posa_idempotent_{idempotency_key}", 
+                f"posa_idempotent_{idempotency_key}",
                 result,
                 expires_in_sec=86400  # 24 hours
             )
-            
-        return result
         
+        return result
     except Exception as e:
-        frappe.logger().error(f"Error in submit_invoice: {str(e)}")
+        # Log and handle any unexpected errors
+        frappe.logger().error(f"Error in submit_invoice: {str(e)}\n{frappe.get_traceback()}")
+        
+        error_response = {
+            "status": "error",
+            "code": "INTERNAL_SERVER_ERROR",
+            "message": str(e),
+            "details": {
+                "error_type": type(e).__name__,
+                "traceback": frappe.get_traceback()
+            }
+        }
+        
+        # Cache the error for idempotency
         if idempotency_key:
-            # Cache the error result
-            error_result = {"status": "error", "error": str(e)}
             frappe.cache().set_value(
-                f"posa_idempotent_{idempotency_key}", 
-                error_result,
+                f"posa_idempotent_{idempotency_key}",
+                error_response,
                 expires_in_sec=86400  # 24 hours
             )
-        raise e
+        
+        return error_response
 
 
 def set_batch_nos_for_bundels(doc, warehouse_field, throw=False):
@@ -1035,7 +1254,12 @@ def submit_in_background_job(kwargs):
         
         # Check if the invoice is already submitted
         if invoice_doc.docstatus == 1:
-            result = {"name": invoice_doc.name, "status": invoice_doc.docstatus, "already_submitted": True}
+            result = {
+                "name": invoice_doc.name, 
+                "status": "already_submitted", 
+                "docstatus": invoice_doc.docstatus,
+                "api_version": API_VERSION
+            }
             # Cache for idempotency
             if idempotency_key:
                 frappe.cache().set_value(
@@ -1063,19 +1287,85 @@ def submit_in_background_job(kwargs):
         # Add background job metadata
         background_info = f"\nProcessed by: Background Job"
         idempotency_info = f"\nIdempotency Key: {idempotency_key or 'none'}"
+        api_version_info = f"\nAPI Version: {API_VERSION}"
+        timestamp_info = f"\nProcessed at: {now_datetime()}"
         items.append(background_info)
         items.append(idempotency_info)
+        items.append(api_version_info)
+        items.append(timestamp_info)
         
         invoice_doc.remarks = "\n".join(items)
-        invoice_doc.save()
         
-        # Submit the invoice
-        invoice_doc.submit()
-        redeeming_customer_credit(
-            invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
-        )
+        # Save with validation error handling
+        try:
+            invoice_doc.save()
+        except Exception as validation_error:
+            # Capture and format validation errors from the server
+            error_response = {
+                "status": "error",
+                "code": "SERVER_VALIDATION_FAILED",
+                "message": str(validation_error),
+                "details": {
+                    "error_type": type(validation_error).__name__,
+                    "traceback": frappe.get_traceback()
+                },
+                "api_version": API_VERSION
+            }
+            
+            # Cache validation errors for idempotency
+            if idempotency_key:
+                frappe.cache().set_value(
+                    f"posa_idempotent_{idempotency_key}",
+                    error_response,
+                    expires_in_sec=86400  # 24 hours
+                )
+            
+            frappe.logger().error(f"Background job: server validation failed: {str(validation_error)}")
+            return error_response
         
-        result = {"name": invoice_doc.name, "status": invoice_doc.docstatus, "processed_by": "background_job"}
+        # Submit the invoice with error handling
+        try:
+            invoice_doc.submit()
+        except Exception as submit_error:
+            # Handle submission errors
+            error_response = {
+                "status": "error",
+                "code": "SUBMIT_FAILED",
+                "message": str(submit_error),
+                "details": {
+                    "error_type": type(submit_error).__name__,
+                    "traceback": frappe.get_traceback()
+                },
+                "api_version": API_VERSION
+            }
+            
+            # Cache submission errors for idempotency
+            if idempotency_key:
+                frappe.cache().set_value(
+                    f"posa_idempotent_{idempotency_key}",
+                    error_response,
+                    expires_in_sec=86400  # 24 hours
+                )
+            
+            frappe.logger().error(f"Background job: invoice submission failed: {str(submit_error)}")
+            return error_response
+            
+        # Process customer credit
+        try:
+            redeeming_customer_credit(
+                invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
+            )
+        except Exception as credit_error:
+            # Log credit processing errors but don't fail the whole submission
+            frappe.logger().error(f"Background job: credit processing failed: {str(credit_error)}")
+        
+        result = {
+            "name": invoice_doc.name, 
+            "status": "submitted", 
+            "docstatus": invoice_doc.docstatus,
+            "processed_by": "background_job",
+            "api_version": API_VERSION
+        }
         
         # Store the result for idempotency
         if idempotency_key:
@@ -1092,22 +1382,29 @@ def submit_in_background_job(kwargs):
         error_msg = f"Background job: error submitting invoice {invoice}: {str(e)}"
         frappe.logger().error(error_msg)
         
+        # Detailed error response
+        error_response = {
+            "status": "error", 
+            "code": "BACKGROUND_JOB_ERROR",
+            "message": str(e), 
+            "details": {
+                "invoice": invoice,
+                "error_type": type(e).__name__,
+                "traceback": frappe.get_traceback()
+            },
+            "processed_by": "background_job",
+            "api_version": API_VERSION
+        }
+        
         # Store the error for idempotency
         if idempotency_key:
-            error_result = {
-                "name": invoice, 
-                "status": "error", 
-                "error": str(e), 
-                "processed_by": "background_job"
-            }
             frappe.cache().set_value(
                 f"posa_idempotent_{idempotency_key}",
-                error_result,
+                error_response,
                 expires_in_sec=86400  # 24 hours
             )
         
-        # Raise the exception to be handled by the queuing system
-        raise
+        return error_response
 
 
 @frappe.whitelist()
@@ -2547,3 +2844,36 @@ def get_customers(pos_profile=None):
 
     # Use existing get_customer_names function which has the same functionality
     return get_customer_names(json.dumps(_pos_profile))
+
+@frappe.whitelist()
+def get_api_version():
+    """
+    Get the current API version information
+    
+    Returns:
+        dict: API version details
+    """
+    # Add SemVer version details (for better client compatibility checking)
+    version_parts = API_VERSION.split('.')
+    major = int(version_parts[0]) if len(version_parts) > 0 else 0
+    minor = int(version_parts[1]) if len(version_parts) > 1 else 0
+    patch = int(version_parts[2]) if len(version_parts) > 2 else 0
+    
+    return {
+        "version": API_VERSION,
+        "semver": {
+            "major": major,
+            "minor": minor,
+            "patch": patch
+        },
+        "app_info": get_app_info(),
+        "features": {
+            "schema_validation": True,
+            "detailed_errors": True,
+            "idempotency": True
+        },
+        "schema": {
+            "invoice": INVOICE_SCHEMA,
+            "additional_data": ADDITIONAL_DATA_SCHEMA
+        }
+    }
