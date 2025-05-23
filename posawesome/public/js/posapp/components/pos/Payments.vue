@@ -952,16 +952,12 @@ export default {
       }
       
       // For online mode, proceed with normal submission
-      // Rest of existing submit method...
       if (payment_received || frappe.user.has_role("Healthcare Receptionist")) {
         this.invoice_doc.is_pos = 1;
       }
       if (frappe.user.has_role("Healthcare Receptionist") && this.sales_person) {
         this.invoice_doc.sales_team = [{ sales_person: this.sales_person, allocated_percentage: 100 }];
       }
-      
-      // Continue with existing validation logic...
-      // ... existing validation code
       
       // Proceed to submit the invoice
       this.submit_invoice(print);

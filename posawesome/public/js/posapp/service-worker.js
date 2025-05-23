@@ -54,7 +54,10 @@ self.addEventListener('install', event => {
         console.log('[Service Worker] Caching static resources');
         return Promise.allSettled(
           STATIC_RESOURCES.map(url => {
-            return fetch(url, { credentials: 'same-origin' })
+            return fetch(url, { 
+              credentials: 'same-origin',
+              cache: 'no-store'
+            })
               .then(response => {
                 if (!response.ok) {
                   throw new Error(`Failed to fetch ${url}: ${response.status}`);
@@ -63,7 +66,6 @@ self.addEventListener('install', event => {
               })
               .catch(error => {
                 console.warn(`[Service Worker] Failed to cache ${url}:`, error);
-                // Continue with other resources even if one fails
                 return Promise.resolve();
               });
           })
@@ -85,7 +87,6 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   console.log('[Service Worker] Activating...');
   
-  // Delete old caches
   event.waitUntil(
     caches.keys()
       .then(cacheNames => {
@@ -107,7 +108,6 @@ self.addEventListener('activate', event => {
         return self.clients.claim();
       })
       .then(() => {
-        // Set up network status checking
         startNetworkStatusChecking();
         return self.skipWaiting();
       })
@@ -120,26 +120,27 @@ self.addEventListener('activate', event => {
  */
 self.addEventListener('fetch', event => {
   const request = event.request;
-  
-  // Skip non-GET requests
-  if (request.method !== 'GET') {
+  const url = new URL(request.url);
+
+  // Skip non-GET requests and browser extensions
+  if (request.method !== 'GET' || url.protocol === 'chrome-extension:') {
     return;
   }
 
-  // Handle static resources with cache-first strategy
-  if (STATIC_RESOURCES.some(url => request.url.includes(url))) {
-    event.respondWith(cacheFirstStrategy(request));
-    return;
-  }
-
-  // Handle API requests with network-first strategy
-  if (request.url.includes('/api/')) {
+  // Handle API requests (network-first with cache fallback)
+  if (isApiRequest(request)) {
     event.respondWith(networkFirstStrategy(request));
     return;
   }
 
-  // Default to network-first for other requests
-  event.respondWith(networkFirstStrategy(request));
+  // Handle static resource requests (cache-first with network fallback)
+  if (isStaticResourceRequest(request)) {
+    event.respondWith(cacheFirstStrategy(request));
+    return;
+  }
+
+  // For all other requests (dynamic content)
+  event.respondWith(networkWithCacheFallbackStrategy(request));
 });
 
 /**
