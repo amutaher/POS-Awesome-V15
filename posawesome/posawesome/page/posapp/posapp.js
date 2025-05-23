@@ -34,73 +34,86 @@ frappe.pages['posapp'].on_page_load = function (wrapper) {
 	
 	// Register Service Worker for offline functionality
 	if ('serviceWorker' in navigator) {
-		window.addEventListener('load', () => {
-			navigator.serviceWorker.register('/posawesome/public/js/posapp/service-worker.js')
-				.then((registration) => {
-					console.log('Service Worker registered with scope:', registration.scope);
-					
-					// Setup periodic sync if available
-					if ('periodicSync' in registration) {
-						// Try to register periodic sync with tag and minimum interval
-						registration.periodicSync.register('sync-pos-data', {
-							minInterval: 24 * 60 * 60 * 1000 // One day in ms
-						}).then(() => {
-							console.log('Periodic sync registered successfully');
-						}).catch((err) => {
-							console.log('Periodic sync registration failed:', err);
-						});
-					}
-				})
-				.catch((error) => {
-					console.error('Service Worker registration failed:', error);
+		window.addEventListener('load', async () => {
+			try {
+				// First unregister any existing service workers
+				const existingReg = await navigator.serviceWorker.getRegistration();
+				if (existingReg) {
+					await existingReg.unregister();
+				}
+
+				// Register new service worker
+				const registration = await navigator.serviceWorker.register('/posawesome/public/js/posapp/service-worker.js', {
+					scope: '/'
 				});
 				
-			// Initialize global offlineStorage instance if it doesn't exist
-			// This will be available to all Vue components
-			if (!window.offlineStorage) {
-				import('/assets/posawesome/js/posapp/services/offlineStorage.js')
-					.then((module) => {
-						const OfflineStorage = module.default;
-						window.offlineStorage = new OfflineStorage('posAwesomeDB', 1);
-						window.offlineStorage.init().catch(err => {
-							console.error('Failed to initialize offline storage:', err);
-						});
-					})
-					.catch(err => {
-						console.error('Failed to load offline storage module:', err);
-					});
-			}
-			
-			// Create a fallback function to detect connectivity issues
-			window.checkConnectivity = function() {
-				return new Promise((resolve) => {
-					const timeoutId = setTimeout(() => {
-						// If fetch doesn't complete in 5 seconds, assume offline
-						resolve(false);
-					}, 5000);
-					
-					fetch('/api/method/ping', {
-						method: 'GET',
-						cache: 'no-store',
-						headers: { 'pragma': 'no-cache' }
-					})
-					.then(response => {
-						clearTimeout(timeoutId);
-						resolve(response.ok);
-					})
-					.catch(() => {
-						clearTimeout(timeoutId);
-						resolve(false);
-					});
-				});
-			};
-			
-			// Listen for online/offline events
-			window.addEventListener('online', () => {
-				// When coming back online, try to sync data
-				if (window.offlineStorage) {
-					window.offlineStorage.triggerSync();
+				console.log('Service Worker registered with scope:', registration.scope);
+				
+				// Force update
+				if (registration.active) {
+					registration.active.postMessage({ type: 'SKIP_WAITING' });
 				}
+				
+				// Setup periodic sync if available
+				if ('periodicSync' in registration) {
+					try {
+						await registration.periodicSync.register('sync-pos-data', {
+							minInterval: 24 * 60 * 60 * 1000 // One day in ms
+						});
+						console.log('Periodic sync registered successfully');
+					} catch (err) {
+						console.warn('Periodic sync registration failed:', err);
+					}
+				}
+
+				// Initialize IndexedDB for offline storage
+				if (!window.offlineStorage) {
+					try {
+						const { default: OfflineStorage } = await import('/posawesome/public/js/posapp/services/offlineStorage.js');
+						window.offlineStorage = new OfflineStorage('posAwesomeDB', 1);
+						await window.offlineStorage.init();
+						console.log('Offline storage initialized successfully');
+					} catch (err) {
+						console.error('Failed to initialize offline storage:', err);
+						frappe.show_alert({
+							message: __('Failed to initialize offline storage. Some offline features may not work.'),
+							indicator: 'red'
+						});
+					}
+				}
+			} catch (error) {
+				console.error('Service Worker registration failed:', error);
+				frappe.show_alert({
+					message: __('Failed to register service worker. Offline mode may not work properly.'),
+					indicator: 'red'
+				});
+			}
+		});
+
+		// Listen for online/offline events
+		window.addEventListener('online', async () => {
+			console.log('Device is online');
+			frappe.show_alert({
+				message: __('You are back online'),
+				indicator: 'green'
+			});
+			
+			// When coming back online, try to sync data
+			if (window.offlineStorage) {
+				try {
+					await window.offlineStorage.triggerSync();
+					console.log('Offline data sync triggered');
+				} catch (err) {
+					console.error('Failed to sync offline data:', err);
+				}
+			}
+		});
+
+		window.addEventListener('offline', () => {
+			console.log('Device is offline');
+			frappe.show_alert({
+				message: __('You are offline. Some features may be limited.'),
+				indicator: 'red'
 			});
 		});
 	}

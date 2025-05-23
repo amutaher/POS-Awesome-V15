@@ -4,8 +4,8 @@
  * Version: 1.0.0
  */
 
-// Cache Names
-const CACHE_VERSION = 'v1';
+// Cache Names with versioning
+const CACHE_VERSION = 'v2';
 const STATIC_CACHE_NAME = 'pos-awesome-static-' + CACHE_VERSION;
 const DYNAMIC_CACHE_NAME = 'pos-awesome-dynamic-' + CACHE_VERSION;
 const API_CACHE_NAME = 'pos-awesome-api-' + CACHE_VERSION;
@@ -13,12 +13,19 @@ const API_CACHE_NAME = 'pos-awesome-api-' + CACHE_VERSION;
 // Resources to cache
 const STATIC_RESOURCES = [
   '/',
+  '/posawesome/point-of-sale',
   '/posawesome/public/js/posapp/index.html',
   '/posawesome/public/js/posapp/app.js',
   '/posawesome/public/js/posapp/styles.css',
   '/posawesome/public/js/posapp/manifest.json',
-  '/posawesome/public/js/posapp/assets/icons/*',
-  // Add other static resources
+  '/posawesome/public/js/posapp/offline.html',
+  '/posawesome/public/images/pos-icon-192x192.png',
+  '/posawesome/public/images/pos-icon-512x512.png',
+  '/assets/css/frappe-web.min.css',
+  '/assets/js/frappe-web.min.js',
+  '/assets/posawesome/node_modules/vuetify/dist/vuetify.min.css',
+  'https://cdn.jsdelivr.net/npm/@mdi/font@6.x/css/materialdesignicons.min.css',
+  'https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900'
 ];
 
 // Default offline page
@@ -27,12 +34,13 @@ const OFFLINE_PAGE = '/posawesome/public/js/posapp/offline.html';
 // Maximum number of items to keep in dynamic cache
 const DYNAMIC_CACHE_MAX_ITEMS = 100;
 
-// API endpoints to cache
+// API endpoints to cache with network-first strategy
 const API_ENDPOINTS = [
   '/api/method/frappe.auth.get_logged_user',
   '/api/method/posawesome.posawesome.api.get_items',
   '/api/method/posawesome.posawesome.api.get_customers',
-  // Add other API endpoints
+  '/api/method/posawesome.posawesome.api.get_pos_profile',
+  '/api/method/posawesome.posawesome.api.get_item_groups'
 ];
 
 // Network status tracking
@@ -47,18 +55,19 @@ let networkStatusInterval;
 self.addEventListener('install', event => {
   console.log('[Service Worker] Installing...');
   
-  // Skip waiting to activate immediately
-  self.skipWaiting();
-  
   event.waitUntil(
     caches.open(STATIC_CACHE_NAME)
       .then(cache => {
-        console.log('[Service Worker] Caching static resources');
+        console.log('[Service Worker] Pre-caching static resources');
         return cache.addAll(STATIC_RESOURCES).catch(error => {
-          console.error('[Service Worker] Failed to cache some static resources:', error);
-          // Continue anyway - partial caching is better than none
-          return cache.addAll([OFFLINE_PAGE]);
+          console.error('[Service Worker] Failed to cache some resources:', error);
+          // Continue with what we could cache
+          return;
         });
+      })
+      .then(() => {
+        console.log('[Service Worker] Pre-caching complete');
+        return self.skipWaiting();
       })
   );
 });
@@ -70,32 +79,25 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   console.log('[Service Worker] Activating...');
   
-  // Delete old caches
   event.waitUntil(
-    caches.keys()
-      .then(cacheNames => {
+    Promise.all([
+      // Delete old caches
+      caches.keys().then(cacheNames => {
         return Promise.all(
           cacheNames.map(cacheName => {
             if (
-              cacheName !== STATIC_CACHE_NAME && 
-              cacheName !== DYNAMIC_CACHE_NAME && 
-              cacheName !== API_CACHE_NAME
+              cacheName.startsWith('pos-awesome-') && 
+              !cacheName.endsWith(CACHE_VERSION)
             ) {
               console.log('[Service Worker] Deleting old cache:', cacheName);
               return caches.delete(cacheName);
             }
           })
         );
-      })
-      .then(() => {
-        console.log('[Service Worker] Claiming clients');
-        return self.clients.claim();
-      })
-      .then(() => {
-        // Set up network status checking
-        startNetworkStatusChecking();
-        return self.skipWaiting();
-      })
+      }),
+      // Take control of all clients
+      self.clients.claim()
+    ])
   );
 });
 
@@ -112,20 +114,20 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Handle API requests (network-first with cache fallback)
+  // Handle API requests
   if (isApiRequest(request)) {
-    event.respondWith(networkFirstStrategy(request));
+    event.respondWith(networkFirstWithTimeout(request));
     return;
   }
 
-  // Handle static resource requests (cache-first with network fallback)
+  // Handle static resource requests
   if (isStaticResourceRequest(request)) {
-    event.respondWith(cacheFirstStrategy(request));
+    event.respondWith(cacheFirst(request));
     return;
   }
 
-  // For all other requests (dynamic content)
-  event.respondWith(networkWithCacheFallbackStrategy(request));
+  // For all other requests
+  event.respondWith(networkFirst(request));
 });
 
 /**
@@ -182,15 +184,58 @@ self.addEventListener('message', event => {
 });
 
 /**
- * Cache-first strategy with network fallback
+ * Network first strategy with timeout
+ * Used for API requests that should be fresh but can fall back to cache
+ */
+async function networkFirstWithTimeout(request) {
+  try {
+    // Try network first with 5 second timeout
+    const networkResponse = await Promise.race([
+      fetch(request.clone()),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Network timeout')), 5000)
+      )
+    ]);
+
+    // Cache successful responses
+    if (networkResponse.ok) {
+      const cache = await caches.open(API_CACHE_NAME);
+      cache.put(request, networkResponse.clone());
+    }
+
+    return networkResponse;
+  } catch (error) {
+    console.log('[Service Worker] Network request failed, trying cache');
+    
+    const cachedResponse = await caches.match(request);
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+
+    // If nothing in cache, return offline JSON response
+    return new Response(
+      JSON.stringify({
+        error: 'You are offline and this data is not cached',
+        offline: true
+      }),
+      {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' }
+      }
+    );
+  }
+}
+
+/**
+ * Cache first strategy
  * Used for static resources that rarely change
  */
-async function cacheFirstStrategy(request) {
+async function cacheFirst(request) {
   const cachedResponse = await caches.match(request);
   if (cachedResponse) {
     return cachedResponse;
   }
-  
+
   try {
     const networkResponse = await fetch(request);
     const cache = await caches.open(STATIC_CACHE_NAME);
@@ -198,53 +243,44 @@ async function cacheFirstStrategy(request) {
     return networkResponse;
   } catch (error) {
     console.error('[Service Worker] Cache first strategy failed:', error);
-    throw error;
-  }
-}
-
-/**
- * Network-first strategy with cache fallback
- * Used for API requests that should be fresh but can fall back to cache
- */
-async function networkFirstStrategy(request) {
-  try {
-    const networkResponse = await Promise.race([
-      fetch(request),
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('timeout')), 5000)
-      )
-    ]);
     
-    // Cache successful response
-    const cache = await caches.open(API_CACHE_NAME);
-    cache.put(request, networkResponse.clone());
-    return networkResponse;
-  } catch (error) {
-    console.log('[Service Worker] Network request failed, falling back to cache');
-    const cachedResponse = await caches.match(request);
-    if (cachedResponse) {
-      return cachedResponse;
+    // For HTML requests, return offline page
+    if (request.headers.get('Accept').includes('text/html')) {
+      return caches.match('/posawesome/public/js/posapp/offline.html');
     }
+    
     throw error;
   }
 }
 
 /**
- * Network with cache fallback strategy
+ * Network first strategy
  * Used for most dynamic content
  */
-async function networkWithCacheFallbackStrategy(request) {
+async function networkFirst(request) {
   try {
     const networkResponse = await fetch(request);
-    const cache = await caches.open(DYNAMIC_CACHE_NAME);
-    cache.put(request, networkResponse.clone());
+    
+    // Cache successful responses
+    if (networkResponse.ok) {
+      const cache = await caches.open(DYNAMIC_CACHE_NAME);
+      cache.put(request, networkResponse.clone());
+    }
+    
     return networkResponse;
   } catch (error) {
-    console.log('[Service Worker] Network request failed, falling back to cache');
+    console.log('[Service Worker] Network request failed, trying cache');
+    
     const cachedResponse = await caches.match(request);
     if (cachedResponse) {
       return cachedResponse;
     }
+    
+    // For HTML requests, return offline page
+    if (request.headers.get('Accept').includes('text/html')) {
+      return caches.match('/posawesome/public/js/posapp/offline.html');
+    }
+    
     throw error;
   }
 }
@@ -454,15 +490,17 @@ function isApiRequest(request) {
  */
 function isStaticResourceRequest(request) {
   const url = new URL(request.url);
-  const path = url.pathname;
-  
-  // Check if the path matches any static resource path
   return STATIC_RESOURCES.some(resource => {
-    const resourcePath = new URL(resource, self.location.origin).pathname;
-    return path === resourcePath || path.includes('.js') || 
-           path.includes('.css') || path.includes('.svg') || 
-           path.includes('.png') || path.includes('.jpg') || 
-           path.includes('.json') || path.includes('.woff') || 
-           path.includes('.ttf');
+    if (resource.startsWith('http')) {
+      return request.url === resource;
+    }
+    return url.pathname === resource || 
+           url.pathname.endsWith('.js') ||
+           url.pathname.endsWith('.css') ||
+           url.pathname.endsWith('.png') ||
+           url.pathname.endsWith('.jpg') ||
+           url.pathname.endsWith('.svg') ||
+           url.pathname.endsWith('.woff2') ||
+           url.pathname.endsWith('.ttf');
   });
 } 
