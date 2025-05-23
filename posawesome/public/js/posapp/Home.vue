@@ -102,6 +102,14 @@
       <!-- Database Migration Dialog -->
       <DBMigrationDialog ref="dbMigrationDialog"></DBMigrationDialog>
       
+      <!-- Auth Error Dialog -->
+      <AuthErrorDialog 
+        ref="authErrorDialog"
+        @auth-error="handleAuthError"
+        @auth-restored="handleAuthRestored"
+        @dismissed="handleAuthDialogDismissed"
+      ></AuthErrorDialog>
+      
       <component v-bind:is="page" class="mx-4 md-4" v-if="!bootstrapRequired || bootstrapSkipped"></component>
       <v-card v-else class="mx-4 md-4 pa-5 text-center">
         <v-card-title class="justify-center">Offline Data Not Ready</v-card-title>
@@ -125,6 +133,7 @@ import POS from './components/pos/Pos.vue';
 import Payments from './components/payments/Pay.vue';
 import BootstrapDialog from './components/bootstrap/BootstrapDialog.vue';
 import DBMigrationDialog from './components/bootstrap/DBMigrationDialog.vue';
+import AuthErrorDialog from './components/pos/AuthErrorDialog.vue';
 import { 
   registerServiceWorker, 
   initServiceWorkerMessaging, 
@@ -156,7 +165,8 @@ export default {
       appInitialized: false,
       serviceWorkerInitialized: false,
       isPWA: false,
-      hasBackgroundSync: false
+      hasBackgroundSync: false,
+      authErrorActive: false
     };
   },
   components: {
@@ -164,7 +174,8 @@ export default {
     POS,
     Payments,
     BootstrapDialog,
-    DBMigrationDialog
+    DBMigrationDialog,
+    AuthErrorDialog
   },
   computed: {
     /**
@@ -467,6 +478,9 @@ export default {
         // Set up network checking
         this.setupNetworkChecking();
         
+        // Set up auth error listeners
+        this.setupAuthErrorListeners();
+        
         // Initialize the service worker AFTER storage is ready
         await this.initializeServiceWorker();
         
@@ -529,6 +543,38 @@ export default {
         // Enable manual sync as fallback
         this.enableManualSync();
       }
+    },
+    
+    /**
+     * Set up auth error listeners
+     */
+    setupAuthErrorListeners() {
+      // Listen for auth error events
+      window.addEventListener('pos-awesome-auth-error', this.handleGlobalAuthError);
+      
+      // Listen for auth restored events
+      window.addEventListener('pos-awesome-auth-restored', this.handleGlobalAuthRestored);
+    },
+    
+    /**
+     * Handle global auth error event
+     */
+    handleGlobalAuthError(event) {
+      console.warn('[Home] Global auth error event:', event.detail);
+      this.authErrorActive = true;
+    },
+    
+    /**
+     * Handle global auth restored event
+     */
+    handleGlobalAuthRestored(event) {
+      console.log('[Home] Global auth restored event:', event.detail);
+      this.authErrorActive = false;
+      
+      // Try a sync after auth is restored
+      setTimeout(() => {
+        this.attemptSync();
+      }, 1000);
     },
     
     async checkBootstrapRequired() {
@@ -594,49 +640,51 @@ export default {
         return;
       }
       
+      // Don't try to sync if we have an active auth error
+      if (this.authErrorActive) {
+        console.log('[Home] Not syncing due to active auth error');
+        return;
+      }
+      
       console.log('[Home] Attempting automatic sync');
       this.syncingInProgress = true;
       
-      // First try to use service worker sync if available
-      if (this.serviceWorkerInitialized && this.serviceWorkerRegistration) {
-        triggerServiceWorkerSync()
-          .then(triggered => {
-            if (!triggered) {
-              // Fallback to direct sync
-              return this.offlineStorage.manualSync();
-            }
-            // Sync was triggered via service worker
-            return { success: true, serviceWorker: true };
-          })
-          .then(result => {
-            console.log('[Home] Auto-sync initiated:', result);
-            if (!result.serviceWorker) {
-              // If we did a direct sync without service worker, we can update UI immediately
-              this.syncingInProgress = false;
-              if (result.success) {
-                this.syncSnackbar = true;
-                this.syncMessage = 'Sync completed successfully';
-              } else {
-                this.syncSnackbar = true;
-                this.syncMessage = `Sync failed: ${result.error || result.reason || 'Unknown error'}`;
-              }
-            }
-            // If we used service worker, the sync is still in progress
-            // and will be handled by service worker message events
-          })
-          .catch(error => {
-            console.error('[Home] Auto-sync error:', error);
+      // First check if auth is valid before syncing
+      this.checkAuthStatus()
+        .then(authValid => {
+          if (!authValid) {
+            console.log('[Home] Not syncing due to invalid auth');
             this.syncingInProgress = false;
-            this.syncSnackbar = true;
-            this.syncMessage = `Sync failed: ${error.message || 'Unknown error'}`;
-          });
-      } else {
-        // No service worker, use direct sync
-        this.offlineStorage.manualSync()
-          .then(result => {
-            console.log('[Home] Manual sync result:', result);
+            return { success: false, reason: 'auth_invalid' };
+          }
+          
+          // Auth is valid, proceed with sync
+          // Try to use service worker sync if available
+          if (this.serviceWorkerInitialized && this.serviceWorkerRegistration) {
+            return triggerServiceWorkerSync()
+              .then(triggered => {
+                if (!triggered) {
+                  // Fallback to direct sync
+                  return this.offlineStorage.manualSync();
+                }
+                // Sync was triggered via service worker
+                return { success: true, serviceWorker: true };
+              });
+          } else {
+            // No service worker, use direct sync
+            return this.offlineStorage.manualSync();
+          }
+        })
+        .then(result => {
+          console.log('[Home] Auto-sync initiated:', result);
+          if (result.reason === 'auth_invalid') {
+            // Already handled
+            return;
+          }
+          
+          if (!result.serviceWorker) {
+            // If we did a direct sync without service worker, we can update UI immediately
             this.syncingInProgress = false;
-            
             if (result.success) {
               this.syncSnackbar = true;
               this.syncMessage = 'Sync completed successfully';
@@ -644,13 +692,62 @@ export default {
               this.syncSnackbar = true;
               this.syncMessage = `Sync failed: ${result.error || result.reason || 'Unknown error'}`;
             }
-          })
-          .catch(error => {
-            console.error('[Home] Manual sync error:', error);
-            this.syncingInProgress = false;
-            this.syncSnackbar = true;
-            this.syncMessage = `Sync failed: ${error.message || 'Unknown error'}`;
+          }
+          // If we used service worker, the sync is still in progress
+          // and will be handled by service worker message events
+        })
+        .catch(error => {
+          console.error('[Home] Auto-sync error:', error);
+          this.syncingInProgress = false;
+          this.syncSnackbar = true;
+          this.syncMessage = `Sync failed: ${error.message || 'Unknown error'}`;
+        });
+    },
+    
+    /**
+     * Check if current authentication is valid
+     * @returns {Promise<boolean>} Promise that resolves with auth status
+     */
+    async checkAuthStatus() {
+      try {
+        // Make a lightweight API call to check if session is valid
+        const response = await fetch('/api/method/frappe.auth.get_logged_user', {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          }
+        });
+        
+        if (response.status === 401 || response.status === 403) {
+          // Auth error, show login prompt
+          this.authErrorActive = true;
+          this.$refs.authErrorDialog.handleAuthError({
+            detail: {
+              message: 'Session expired',
+              code: response.status,
+              timestamp: new Date().toISOString(),
+              loginUrl: '/login'
+            }
           });
+          return false;
+        }
+        
+        if (!response.ok) {
+          console.warn('[Home] Auth check failed:', response.status);
+          return false;
+        }
+        
+        const result = await response.json();
+        if (!result.message) {
+          console.warn('[Home] Auth check: No user found');
+          return false;
+        }
+        
+        return true;
+      } catch (error) {
+        console.warn('[Home] Auth check error:', error);
+        return false;
       }
     },
     
@@ -778,6 +875,61 @@ export default {
           detail: { error: error.message }
         }));
       }
+    },
+    
+    /**
+     * Handle authentication error from OfflineStorage
+     */
+    handleAuthError(detail) {
+      console.warn('Authentication error:', detail);
+      // Optionally disable sync operations or show additional UI indicators
+      this.authErrorActive = true;
+    },
+    
+    /**
+     * Handle authentication restored event
+     */
+    handleAuthRestored(detail) {
+      console.log('Authentication restored:', detail);
+      this.authErrorActive = false;
+      // Optionally trigger a sync now that auth is restored
+      this.syncAfterAuthRestored();
+    },
+    
+    /**
+     * Handle auth dialog dismissed without login
+     */
+    handleAuthDialogDismissed() {
+      console.log('Auth dialog dismissed');
+      // User chose to dismiss without logging in
+    },
+    
+    /**
+     * Trigger sync after authentication is restored
+     */
+    syncAfterAuthRestored() {
+      // Wait a moment to ensure session is fully established
+      setTimeout(() => {
+        if (this.offlineStorage) {
+          this.syncMessage = 'Syncing after authentication restored...';
+          this.syncSnackbar = true;
+          this.syncingInProgress = true;
+          
+          this.offlineStorage.manualSync()
+            .then(result => {
+              this.syncingInProgress = false;
+              this.syncMessage = result.success 
+                ? 'Sync completed successfully!' 
+                : `Sync failed: ${result.reason || 'unknown error'}`;
+              this.syncSnackbar = true;
+            })
+            .catch(error => {
+              this.syncingInProgress = false;
+              this.syncMessage = `Sync error: ${error.message || 'unknown error'}`;
+              this.syncSnackbar = true;
+            });
+        }
+      }, 1000);
     },
   },
   

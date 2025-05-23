@@ -1296,6 +1296,18 @@ export default class OfflineStorage {
       return false;
     }
 
+    // Check if auth error was encountered recently (within last 2 minutes)
+    const lastAuthErrorTime = await this.getData('settings', 'lastAuthErrorTime');
+    if (lastAuthErrorTime && lastAuthErrorTime.value) {
+      const twoMinutesAgo = Date.now() - 2 * 60 * 1000;
+      if (new Date(lastAuthErrorTime.value).getTime() > twoMinutesAgo) {
+        console.log('[OfflineStorage] Skipping sync due to recent auth error');
+        // Emit event to notify UI that reauth is needed
+        this.emitAuthErrorEvent('Processing paused - authentication required');
+        return false;
+      }
+    }
+
     // First check and clear any stale sync locks (older than 5 minutes)
     await this.clearStaleSyncLocks(pendingInvoices);
     
@@ -1315,10 +1327,19 @@ export default class OfflineStorage {
     // Get device ID for additional idempotency control
     const deviceId = await getDeviceId();
     
+    // Track if we encountered auth errors during this sync session
+    let authErrorEncountered = false;
+    
     // Process each invoice
     const results = await Promise.allSettled(
       availableInvoices.map(async (envelope) => {
         try {
+          // Skip processing if auth error already encountered
+          if (authErrorEncountered) {
+            console.log(`[OfflineStorage] Skipping invoice ${envelope.id} due to auth error`);
+            return { status: 'skipped_auth_error', id: envelope.id };
+          }
+          
           // Set sync lock to prevent concurrent processing
           const lockTime = new Date().toISOString();
           envelope.syncLock = lockTime;
@@ -1343,7 +1364,25 @@ export default class OfflineStorage {
                 })
               });
               
+              // Check for auth errors early
+              if (checkResponse.status === 401 || checkResponse.status === 403) {
+                // Auth error detected
+                authErrorEncountered = true;
+                await this.handleAuthError(envelope, checkResponse.status, 'API access unauthorized');
+                return { status: 'auth_error', id: envelope.id, code: checkResponse.status };
+              }
+              
               const checkResult = await checkResponse.json();
+              
+              // Check for CSRF errors in response
+              if (checkResult.exc_type === 'CSRFTokenError' || 
+                  (checkResult.exception && checkResult.exception.includes('CSRF')) ||
+                  (checkResult.message && checkResult.message.includes('CSRF'))) {
+                authErrorEncountered = true;
+                await this.handleAuthError(envelope, 'CSRF', 'CSRF token expired');
+                return { status: 'auth_error', id: envelope.id, code: 'CSRF' };
+              }
+              
               if (checkResult.message === true) {
                 console.log(`[OfflineStorage] Invoice ${envelope.data.name} already exists on server`);
                 // Invoice already exists - we can safely remove it from pending
@@ -1386,6 +1425,13 @@ export default class OfflineStorage {
             })
           });
           
+          // Check for auth errors (401 Unauthorized, 403 Forbidden)
+          if (response.status === 401 || response.status === 403) {
+            authErrorEncountered = true;
+            await this.handleAuthError(envelope, response.status, 'API access unauthorized');
+            return { status: 'auth_error', id: envelope.id, code: response.status };
+          }
+          
           // Check if the invoice is still in the database with our lock
           const currentEnvelope = await this.getData('pendingInvoices', envelope.id);
           if (!currentEnvelope || currentEnvelope.syncLock !== lockTime) {
@@ -1393,17 +1439,51 @@ export default class OfflineStorage {
             return { status: 'concurrent_processing', id: envelope.id };
           }
           
-          // If the response is successful but not JSON (e.g. HTML error page)
-          if (response.ok && !response.headers.get('content-type')?.includes('application/json')) {
-            console.warn(`[OfflineStorage] Received non-JSON response for invoice ${envelope.id}`);
-            // Clear the sync lock so it can be retried
+          // Handle HTML login page response (common when session expires)
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.includes('text/html')) {
+            const responseText = await response.text();
+            // Check if it's a login page by looking for common login form elements
+            if (responseText.includes('login') && 
+                (responseText.includes('<form') || responseText.includes('password'))) {
+              console.warn(`[OfflineStorage] Received login page for invoice ${envelope.id}`);
+              authErrorEncountered = true;
+              await this.handleAuthError(envelope, 'SESSION_EXPIRED', 'Session expired');
+              return { status: 'auth_error', id: envelope.id, code: 'SESSION_EXPIRED' };
+            }
+            
+            // Not a login page, but still not the expected JSON
+            console.warn(`[OfflineStorage] Received HTML response for invoice ${envelope.id}`);
             envelope.syncLock = null;
+            envelope.lastError = 'Unexpected HTML response';
             await this.saveData('pendingInvoices', envelope);
-            return { status: 'retry', id: envelope.id, error: 'Non-JSON response' };
+            return { status: 'retry', id: envelope.id, error: 'Unexpected HTML response' };
           }
           
           try {
             const result = await response.json();
+            
+            // Check for CSRF error in the response
+            if (result.exc_type === 'CSRFTokenError' || 
+                (result.exception && result.exception.includes('CSRF')) ||
+                (result.message && result.message.includes('CSRF'))) {
+              authErrorEncountered = true;
+              await this.handleAuthError(envelope, 'CSRF', 'CSRF token expired');
+              return { status: 'auth_error', id: envelope.id, code: 'CSRF' };
+            }
+            
+            // Check for auth-related errors in frappe response format
+            if (result.exc_type === 'AuthenticationError' || 
+                result.exc_type === 'PermissionError' ||
+                (result.message && (
+                  result.message.includes('not authorized') || 
+                  result.message.includes('session expired') ||
+                  result.message.includes('permission')
+                ))) {
+              authErrorEncountered = true;
+              await this.handleAuthError(envelope, result.exc_type, result.message || 'Permission denied');
+              return { status: 'auth_error', id: envelope.id, code: result.exc_type };
+            }
             
             if (response.status === 409) {
               // Conflict detected, move to conflicts store
@@ -1463,6 +1543,20 @@ export default class OfflineStorage {
         } catch (error) {
           console.error(`[OfflineStorage] Error processing invoice ${envelope.id}:`, error);
           
+          // Check for fetch errors that might indicate auth problems
+          if (error.message && (
+              error.message.includes('Failed to fetch') || 
+              error.message.includes('NetworkError') ||
+              error.message.includes('load failed'))) {
+            // These could be network errors or CORS errors due to auth
+            // We'll only treat it as auth if we have other signs
+            if (error.status === 401 || error.status === 403) {
+              authErrorEncountered = true;
+              await this.handleAuthError(envelope, error.status, error.message);
+              return { status: 'auth_error', id: envelope.id, code: error.status };
+            }
+          }
+          
           // Check if the invoice is still in the database
           const currentEnvelope = await this.getData('pendingInvoices', envelope.id);
           if (!currentEnvelope) {
@@ -1502,12 +1596,85 @@ export default class OfflineStorage {
     
     console.log('[OfflineStorage] Processing results:', resultSummary);
     
+    // If auth errors were encountered, pause further sync attempts
+    if (authErrorEncountered || resultSummary.auth_error) {
+      console.warn('[OfflineStorage] Authentication errors encountered during sync');
+      this.emitAuthErrorEvent('Authentication required to continue syncing');
+    }
+    
     // Dispatch an event with the results
     window.dispatchEvent(new CustomEvent('pos-awesome-sync-complete', { 
       detail: { 
         results: resultSummary,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        authErrorEncountered: authErrorEncountered
       } 
+    }));
+    
+    return true;
+  }
+  
+  /**
+   * Handle authentication error by recording it and emitting auth error event
+   * @param {Object} envelope The invoice envelope that triggered the auth error
+   * @param {string|number} errorCode The error code or status
+   * @param {string} errorMessage The error message
+   */
+  async handleAuthError(envelope, errorCode, errorMessage) {
+    console.warn(`[OfflineStorage] Auth error (${errorCode}) encountered: ${errorMessage}`);
+    
+    // Clear the sync lock so it can be retried after re-auth
+    envelope.syncLock = null;
+    envelope.lastError = `Authentication error: ${errorMessage}`;
+    envelope.lastAuthError = {
+      code: errorCode,
+      message: errorMessage,
+      timestamp: new Date().toISOString()
+    };
+    await this.saveData('pendingInvoices', envelope);
+    
+    // Record the auth error time to prevent immediate retries
+    await this.saveData('settings', {
+      key: 'lastAuthErrorTime',
+      value: new Date().toISOString()
+    });
+    
+    // Emit an event that the UI can listen for to prompt login
+    this.emitAuthErrorEvent(errorMessage);
+  }
+  
+  /**
+   * Emit auth error event for UI to display login prompt
+   * @param {string} message The error message
+   */
+  emitAuthErrorEvent(message) {
+    window.dispatchEvent(new CustomEvent('pos-awesome-auth-error', {
+      detail: {
+        message: message,
+        timestamp: new Date().toISOString(),
+        loginUrl: '/login'
+      }
+    }));
+  }
+  
+  /**
+   * Reset auth error status after successful login
+   * @returns {Promise} Promise that resolves when status is reset
+   */
+  async resetAuthErrorStatus() {
+    console.log('[OfflineStorage] Resetting auth error status');
+    
+    // Clear the last auth error time
+    await this.saveData('settings', {
+      key: 'lastAuthErrorTime',
+      value: null
+    });
+    
+    // Signal that authentication has been restored
+    window.dispatchEvent(new CustomEvent('pos-awesome-auth-restored', {
+      detail: {
+        timestamp: new Date().toISOString()
+      }
     }));
     
     return true;
@@ -1803,94 +1970,5 @@ export default class OfflineStorage {
     }
     
     return results;
-  }
-
-  /**
-   * Resolve a conflict by either retrying or discarding
-   * @param {string} id The ID of the conflict
-   * @param {string} action Either 'retry' or 'discard'
-   * @returns {Promise<Object>} Result of the resolution
-   */
-  async resolveConflict(id, action) {
-    await this.ready;
-    
-    const conflict = await this.getData('conflicts', id);
-    if (!conflict) {
-      return { status: 'error', message: 'Conflict not found' };
-    }
-    
-    // Always check if we're online before attempting to sync
-    if (action === 'retry' && !navigator.onLine) {
-      return { status: 'error', message: 'Cannot retry while offline' };
-    }
-    
-    if (action === 'retry') {
-      // Move back to pending invoices
-      conflict.attempts = 0;
-      conflict.status = 'pending';
-      await this.saveData('pendingInvoices', conflict);
-      await this.deleteData('conflicts', id);
-      await this.triggerSync();
-      return { status: 'retrying', id };
-    } else if (action === 'discard') {
-      // Delete the conflict
-      await this.deleteData('conflicts', id);
-      return { status: 'discarded', id };
-    }
-    
-    return { status: 'error', message: 'Invalid action' };
-  }
-  
-  /**
-   * Check if required offline data is available
-   * @returns {Promise<Object>} Status of offline data availability
-   */
-  async checkOfflineDataAvailability() {
-    await this.ready;
-    
-    const items = await this.getAllData('items');
-    const customers = await this.getAllData('customers');
-    const posProfile = await this.getAllData('posProfile');
-    const taxes = await this.getAllData('taxes');
-    
-    return {
-      itemsAvailable: items && items.length > 0,
-      customersAvailable: customers && customers.length > 0,
-      posProfileAvailable: posProfile && posProfile.length > 0,
-      taxesAvailable: taxes && taxes.length > 0,
-      offlineReady: 
-        (items && items.length > 0) && 
-        (customers && customers.length > 0) && 
-        (posProfile && posProfile.length > 0) &&
-        (taxes && taxes.length > 0)
-    };
-  }
-  
-  /**
-   * Manual sync trigger for browsers without Background Sync
-   * @returns {Promise} Promise that resolves when sync completes
-   */
-  async manualSync() {
-    // Always check current online status before attempting to sync
-    if (!navigator.onLine) {
-      console.log('[OfflineStorage] Cannot sync manually while offline');
-      return { success: false, reason: 'offline' };
-    }
-    
-    try {
-      // Check actual connectivity
-      const isConnected = await this.testActualConnectivity();
-      if (!isConnected) {
-        console.log('[OfflineStorage] Cannot sync manually - no actual connectivity');
-        return { success: false, reason: 'no-connectivity' };
-      }
-      
-      // Process pending invoices
-      const result = await this.processPendingInvoices();
-      return { success: true, result };
-    } catch (error) {
-      console.error('[OfflineStorage] Manual sync error:', error);
-      return { success: false, error: error.message };
-    }
   }
 } 
