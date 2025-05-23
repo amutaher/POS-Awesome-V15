@@ -42,8 +42,8 @@ frappe.pages['posapp'].on_page_load = function (wrapper) {
 					await existingReg.unregister();
 				}
 
-				// Register new service worker
-				const registration = await navigator.serviceWorker.register('/posawesome/public/js/posapp/service-worker.js', {
+				// Register new service worker with correct path
+				const registration = await navigator.serviceWorker.register('/assets/posawesome/js/posapp/service-worker.js', {
 					scope: '/'
 				});
 				
