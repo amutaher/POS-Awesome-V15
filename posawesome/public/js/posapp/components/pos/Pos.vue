@@ -10,7 +10,31 @@
     <OpeningDialog v-if="dialog" :dialog="dialog"></OpeningDialog>
     <v-row v-show="!dialog">
       <v-col v-show="!payment && !offers && !coupons" xl="5" lg="5" md="5" sm="5" cols="12" class="pos pr-0">
-        <ItemsSelector></ItemsSelector>
+        <v-overlay
+          v-if="!isBootstrapComplete && !isBootstrapSkipped"
+          absolute
+          :value="true"
+          opacity="0.9"
+          z-index="5"
+        >
+          <v-card class="pa-5">
+            <v-card-title class="justify-center">
+              <v-icon color="warning" class="mr-2">mdi-database-sync</v-icon>
+              Offline Data Not Ready
+            </v-card-title>
+            <v-card-text class="text-center">
+              <p>Sales operations are disabled until offline data bootstrap is complete.</p>
+              <p>This ensures proper operation when you're offline.</p>
+              <v-btn 
+                color="primary" 
+                class="mt-3" 
+                @click="openBootstrapDialog">
+                Complete Data Bootstrap
+              </v-btn>
+            </v-card-text>
+          </v-card>
+        </v-overlay>
+        <ItemsSelector :disabled="!isBootstrapComplete && !isBootstrapSkipped"></ItemsSelector>
       </v-col>
       <v-col v-show="offers" xl="5" lg="5" md="5" sm="5" cols="12" class="pos pr-0">
         <PosOffers></PosOffers>
@@ -23,7 +47,7 @@
       </v-col>
 
       <v-col xl="7" lg="7" md="7" sm="7" cols="12" class="pos">
-        <Invoice></Invoice>
+        <Invoice :disabled="!isBootstrapComplete && !isBootstrapSkipped"></Invoice>
       </v-col>
     </v-row>
   </div>
@@ -54,6 +78,8 @@ export default {
       payment: false,
       offers: false,
       coupons: false,
+      isBootstrapComplete: false,
+      isBootstrapSkipped: false,
     };
   },
 
@@ -64,7 +90,6 @@ export default {
     Payments,
     Drafts,
     ClosingDialog,
-
     Returns,
     PosOffers,
     PosCoupons,
@@ -150,12 +175,30 @@ export default {
         this.eventBus.emit('set_pos_settings', doc);
       });
     },
+    
+    checkBootstrapStatus() {
+      // Check if data bootstrap is completed using localStorage for performance
+      const localBootstrapStatus = localStorage.getItem('posa_bootstrap_completed');
+      this.isBootstrapComplete = localBootstrapStatus === 'true';
+      
+      // Also check if it was explicitly skipped
+      this.isBootstrapSkipped = localStorage.getItem('posa_bootstrap_skipped') === 'true';
+    },
+    
+    openBootstrapDialog() {
+      this.eventBus.emit('open_bootstrap_dialog');
+    }
   },
 
   mounted: function () {
     this.$nextTick(function () {
+      // Check bootstrap status first
+      this.checkBootstrapStatus();
+      
+      // Continue with normal initialization
       this.check_opening_entry();
       this.get_pos_setting();
+      
       this.eventBus.on('close_opening_dialog', () => {
         this.dialog = false;
       });
@@ -187,8 +230,25 @@ export default {
       this.eventBus.on('submit_closing_pos', (data) => {
         this.submit_closing_pos(data);
       });
+      
+      // Listen for bootstrap events
+      this.eventBus.on('bootstrap_completed', () => {
+        this.isBootstrapComplete = true;
+        localStorage.setItem('posa_bootstrap_completed', 'true');
+      });
+      
+      this.eventBus.on('bootstrap_skipped', () => {
+        this.isBootstrapSkipped = true;
+        localStorage.setItem('posa_bootstrap_skipped', 'true');
+      });
+      
+      // Listen for bootstrap dialog ready event
+      this.eventBus.on('bootstrap_dialog_ready', () => {
+        console.log('Bootstrap dialog is ready');
+      });
     });
   },
+  
   beforeUnmount() {
     this.eventBus.off('close_opening_dialog');
     this.eventBus.off('register_pos_data');
@@ -197,6 +257,9 @@ export default {
     this.eventBus.off('show_coupons');
     this.eventBus.off('open_closing_dialog');
     this.eventBus.off('submit_closing_pos');
+    this.eventBus.off('bootstrap_completed');
+    this.eventBus.off('bootstrap_skipped');
+    this.eventBus.off('bootstrap_dialog_ready');
   },
 };
 </script>

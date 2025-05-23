@@ -107,6 +107,12 @@ import format from "../../format";
 import _ from "lodash";
 export default {
   mixins: [format],
+  props: {
+    disabled: {
+      type: Boolean,
+      default: false
+    }
+  },
   data: () => ({
     pos_profile: "",
     flags: {},
@@ -157,12 +163,16 @@ export default {
 
   methods: {
     show_offers() {
+      if (this.disabled) return;
       this.eventBus.emit("show_offers", "true");
     },
     show_coupons() {
+      if (this.disabled) return;
       this.eventBus.emit("show_coupons", "true");
     },
     get_items() {
+      if (this.disabled) return;
+      
       if (!this.pos_profile) {
         console.error("No POS Profile");
         return;
@@ -305,9 +315,12 @@ export default {
       return items_headers;
     },
     click_item_row(event, { item }) {
+      if (this.disabled) return;
       this.add_item(item)
     },
     add_item(item) {
+      if (this.disabled) return;
+      
       item = { ...item };
       if (item.has_variants) {
         this.eventBus.emit("open_variants_model", item, this.items);
@@ -355,6 +368,8 @@ export default {
       }
     },
     enter_event() {
+      if (this.disabled) return;
+      
       let match = false;
       if (!this.filtered_items.length || !this.first_search) {
         return;
@@ -470,6 +485,8 @@ export default {
       this.$refs.debounce_search.focus();
     },
     update_items_details(items) {
+      if (this.disabled) return;
+      
       const vm = this;
       if (!items || !items.length) return;
 

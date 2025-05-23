@@ -74,7 +74,22 @@
         {{ syncMessage }}
       </v-snackbar>
       
-      <component v-bind:is="page" class="mx-4 md-4"></component>
+      <!-- Data Bootstrap Dialog -->
+      <BootstrapDialog ref="bootstrapDialog"></BootstrapDialog>
+      
+      <component v-bind:is="page" class="mx-4 md-4" v-if="!bootstrapRequired || bootstrapSkipped"></component>
+      <v-card v-else class="mx-4 md-4 pa-5 text-center">
+        <v-card-title class="justify-center">Offline Data Not Ready</v-card-title>
+        <v-card-text>
+          <p>To use the POS system, you need to bootstrap offline data first.</p>
+          <v-btn 
+            color="primary" 
+            class="mt-3" 
+            @click="openBootstrapDialog">
+            Start Data Bootstrap
+          </v-btn>
+        </v-card-text>
+      </v-card>
     </v-main>
   </v-app>
 </template>
@@ -83,6 +98,7 @@
 import Navbar from './components/Navbar.vue';
 import POS from './components/pos/Pos.vue';
 import Payments from './components/payments/Pay.vue';
+import BootstrapDialog from './components/bootstrap/BootstrapDialog.vue';
 import { registerServiceWorker } from './registerServiceWorker';
 import OfflineStorage from './services/offlineStorage';
 
@@ -97,13 +113,17 @@ export default {
       syncingInProgress: false,
       syncSnackbar: false,
       syncMessage: '',
-      offlineStorage: null
+      offlineStorage: null,
+      bootstrapRequired: false,
+      bootstrapComplete: false,
+      bootstrapSkipped: false
     };
   },
   components: {
     Navbar,
     POS,
     Payments,
+    BootstrapDialog
   },
   methods: {
     setPage(page) {
@@ -192,185 +212,139 @@ export default {
         window.addEventListener('pos-awesome-sync-complete', this.handleSyncCompleted);
         window.addEventListener('pos-awesome-enable-manual-sync', this.enableManualSync);
         
-        // Check offline data availability
-        const status = await this.offlineStorage.checkOfflineDataAvailability();
-        console.log('Offline data status:', status);
+        // Check if bootstrap is required
+        await this.checkBootstrapRequired();
         
-        if (!status.offlineReady) {
-          console.log('Offline data not fully available, attempting to cache essential data');
-          // Preload data for offline use if online
-          if (navigator.onLine) {
-            this.preloadOfflineData();
-          }
+        if (this.bootstrapRequired && !this.bootstrapSkipped) {
+          // Open the bootstrap dialog automatically if required
+          this.$nextTick(() => {
+            this.openBootstrapDialog();
+          });
         }
+        
+        // Tell components bootstrap is available
+        this.eventBus.emit('bootstrap_dialog_ready');
       } catch (error) {
-        console.error('Failed to initialize offline support:', error);
+        console.error('Error setting up offline support:', error);
       }
     },
     
-    async preloadOfflineData() {
+    async checkBootstrapRequired() {
       try {
-        // Call your API methods to fetch data
-        console.log('Preloading data for offline use');
+        // Check if data is already bootstrapped from localStorage first (fastest)
+        const localBootstrapStatus = localStorage.getItem('posa_bootstrap_completed');
         
-        if (!this.offlineStorage) {
-          console.error('Offline storage not initialized');
+        if (localBootstrapStatus === 'true') {
+          // Fast path - localStorage says we're bootstrapped
+          this.bootstrapRequired = false;
+          this.bootstrapComplete = true;
           return;
         }
         
-        // Example API calls to cache data for offline use
-        const fetchPosProfile = async () => {
-          try {
-            const result = await frappe.call({
-              method: 'posawesome.posawesome.api.posapp.get_pos_profile',
-              freeze: false
-            });
-            
-            if (result.message) {
-              await this.offlineStorage.cachePosProfile(result.message);
-              console.log('POS profile cached for offline use');
-            }
-          } catch (error) {
-            console.error('Failed to cache POS profile:', error);
+        // Check from IndexedDB if data is available
+        if (this.offlineStorage) {
+          const status = await this.offlineStorage.getData('settings', 'bootstrapCompleted');
+          
+          if (status && status.value === true) {
+            // Data is available in IndexedDB
+            this.bootstrapRequired = false;
+            this.bootstrapComplete = true;
+            localStorage.setItem('posa_bootstrap_completed', 'true');
+            return;
           }
-        };
+        }
         
-        const fetchItems = async () => {
-          try {
-            const result = await frappe.call({
-              method: 'posawesome.posawesome.api.posapp.get_items',
-              freeze: false
-            });
-            
-            if (result.message && result.message.items) {
-              await this.offlineStorage.cacheItems(result.message.items);
-              console.log('Items cached for offline use');
-            }
-          } catch (error) {
-            console.error('Failed to cache items:', error);
-          }
-        };
-        
-        const fetchCustomers = async () => {
-          try {
-            const result = await frappe.call({
-              method: 'posawesome.posawesome.api.posapp.get_customers',
-              freeze: false
-            });
-            
-            if (result.message && result.message.customers) {
-              await this.offlineStorage.cacheCustomers(result.message.customers);
-              console.log('Customers cached for offline use');
-            }
-          } catch (error) {
-            console.error('Failed to cache customers:', error);
-          }
-        };
-        
-        // Execute all fetches in parallel
-        await Promise.all([
-          fetchPosProfile(),
-          fetchItems(),
-          fetchCustomers()
-        ]);
-        
-        console.log('Data preloaded for offline use');
+        // If we reach here, bootstrap is required
+        this.bootstrapRequired = true;
+        this.bootstrapComplete = false;
       } catch (error) {
-        console.error('Failed to preload offline data:', error);
+        console.error('Error checking bootstrap status:', error);
+        // Default to requiring bootstrap if we can't determine status
+        this.bootstrapRequired = true;
+      }
+    },
+    
+    openBootstrapDialog() {
+      if (this.$refs.bootstrapDialog) {
+        this.$refs.bootstrapDialog.open();
       }
     },
     
     handleSyncStarted() {
-      console.log('Sync started');
       this.syncingInProgress = true;
     },
     
     handleSyncCompleted(event) {
-      console.log('Sync completed');
       this.syncingInProgress = false;
       this.syncSnackbar = true;
       this.syncMessage = event.detail?.message || 'Sync completed successfully';
     },
     
     enableManualSync() {
-      console.log('Manual sync enabled');
       this.showManualSync = true;
     },
     
     async manualSync() {
-      if (!this.offlineStorage || this.syncingInProgress) {
-        return;
-      }
+      if (this.syncingInProgress) return;
+      
+      this.syncingInProgress = true;
       
       try {
-        this.syncingInProgress = true;
-        const results = await this.offlineStorage.manualSync();
-        console.log('Manual sync results:', results);
-        
-        this.syncingInProgress = false;
-        this.syncSnackbar = true;
-        this.syncMessage = 'Manual sync completed successfully';
+        if (this.offlineStorage) {
+          await this.offlineStorage.manualSync();
+          this.syncSnackbar = true;
+          this.syncMessage = 'Manual sync completed successfully';
+        }
       } catch (error) {
-        console.error('Manual sync failed:', error);
-        this.syncingInProgress = false;
+        console.error('Manual sync error:', error);
         this.syncSnackbar = true;
-        this.syncMessage = 'Failed to sync: ' + error.message;
+        this.syncMessage = 'Sync failed: ' + (error.message || 'Unknown error');
+      } finally {
+        this.syncingInProgress = false;
       }
     }
   },
+  
   async mounted() {
-    const vm = this;
-    
-    // Fix for shortcut.js errors - capture global errors
-    window.addEventListener('error', function(event) {
-      // Check if error is from shortcut.js
-      if (event.filename && event.filename.includes('shortcut.js')) {
-        console.warn('Prevented shortcut.js error:', event.message);
-        event.preventDefault();
-        event.stopPropagation();
-        return false;
-      }
-    }, true);
-    
-    this.remove_frappe_nav();
-    this.checkNetworkStatus();
-    this.setupPWAInstall();
-    await this.setupOfflineSupport();
-  },
-  updated() { },
-  created: function () {
-    setTimeout(() => {
+    this.$nextTick(async function () {
       this.remove_frappe_nav();
-    }, 1000);
+      this.checkNetworkStatus();
+      this.setupPWAInstall();
+      await this.setupOfflineSupport();
+      
+      // Setup event listeners for bootstrap dialog
+      this.eventBus.on('bootstrap_completed', () => {
+        this.bootstrapRequired = false;
+        this.bootstrapComplete = true;
+        localStorage.setItem('posa_bootstrap_completed', 'true');
+      });
+      
+      this.eventBus.on('bootstrap_skipped', () => {
+        this.bootstrapSkipped = true;
+      });
+      
+      this.eventBus.on('open_bootstrap_dialog', () => {
+        this.openBootstrapDialog();
+      });
+    });
   },
+  
   beforeUnmount() {
-    // Clean up event listeners
-    window.removeEventListener('online', () => {
-      this.offlineSnackbar = false;
-    });
-    
-    window.removeEventListener('offline', () => {
-      this.offlineSnackbar = true;
-    });
-    
-    window.removeEventListener('beforeinstallprompt', () => {});
-    window.removeEventListener('appinstalled', () => {});
-    
-    // Clean up sync event listeners
+    // Remove event listeners
     window.removeEventListener('pos-awesome-sync-started', this.handleSyncStarted);
     window.removeEventListener('pos-awesome-sync-complete', this.handleSyncCompleted);
     window.removeEventListener('pos-awesome-enable-manual-sync', this.enableManualSync);
     
-    // Clean up offline storage
-    if (this.offlineStorage) {
-      this.offlineStorage.destroy();
-    }
+    this.eventBus.off('bootstrap_completed');
+    this.eventBus.off('bootstrap_skipped');
+    this.eventBus.off('open_bootstrap_dialog');
   }
 };
 </script>
 
-<style scoped>
+<style>
 .container1 {
-  margin-top: 0px;
+  max-width: 100%;
+  overflow: hidden;
 }
 </style>

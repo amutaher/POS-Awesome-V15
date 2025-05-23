@@ -455,6 +455,13 @@ import networkDetector from '../../services/networkDetector';
 
 export default {
   mixins: [format],
+  components: { Customer },
+  props: {
+    disabled: {
+      type: Boolean,
+      default: false
+    }
+  },
   data() {
     return {
       // POS profile settings
@@ -514,10 +521,6 @@ export default {
       lastOfflineInvoiceId: null, // ID of last offline invoice
       unsubscribeNetwork: null, // Unsubscribe function for network detector
     };
-  },
-
-  components: {
-    Customer,
   },
 
   computed: {
@@ -691,6 +694,8 @@ export default {
     },
 
     remove_item(item) {
+      if (this.disabled) return; // Don't allow if disabled
+      
       const index = this.items.findIndex(
         (el) => el.posa_row_id == item.posa_row_id
       );
