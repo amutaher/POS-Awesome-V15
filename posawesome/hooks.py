@@ -21,6 +21,47 @@ website_context = {
     "service_worker_scope": "/posawesome/"
 }
 
+# Security Headers
+response_headers = [
+    ('X-Frame-Options', 'SAMEORIGIN'),
+    ('X-Content-Type-Options', 'nosniff'),
+    ('X-XSS-Protection', '1; mode=block'),
+    ('Referrer-Policy', 'strict-origin-when-cross-origin'),
+    ('Feature-Policy', "camera 'self'; microphone 'self'; geolocation 'self'"),
+    ('Service-Worker-Allowed', '/posawesome/'),
+    ('Content-Security-Policy', """
+        default-src 'self';
+        script-src 'self' 'unsafe-inline' 'unsafe-eval';
+        style-src 'self' 'unsafe-inline';
+        img-src 'self' data: blob:;
+        font-src 'self';
+        connect-src 'self' https://*.farooqchemical.com;
+        manifest-src 'self';
+        worker-src 'self';
+        frame-src 'self';
+        media-src 'self';
+        object-src 'none';
+        base-uri 'self';
+        form-action 'self';
+        frame-ancestors 'self';
+        upgrade-insecure-requests;
+    """.replace('\n', ' ').strip())
+]
+
+# PWA Cache Configuration
+pwa_cache_config = {
+    'strategy': 'network-first',
+    'cache_name': 'pos-awesome-v1',
+    'cache_version': app_version,
+    'offline_page': '/posawesome/public/js/posapp/offline.html',
+    'precache_assets': [
+        '/posawesome/public/js/posapp/bundle.js',
+        '/posawesome/public/css/posawesome.css',
+        '/assets/css/frappe-web.min.css',
+        '/assets/js/frappe-web.min.js'
+    ]
+}
+
 # Includes in <head>
 # ------------------
 
