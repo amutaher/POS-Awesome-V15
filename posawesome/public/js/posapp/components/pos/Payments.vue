@@ -1355,13 +1355,35 @@ export default {
                             .then((doc) => {
                               vm.invoice_doc = doc;
                               vm.submit_invoice(null, true);
+                            })
+                            .catch((error) => {
+                              console.error("Error getting invoice doc:", error);
+                              vm.eventBus.emit("show_message", {
+                                title: __("Error getting invoice details"),
+                                color: "error",
+                              });
                             });
                         }
+                      })
+                      .catch((error) => {
+                        console.error("Error getting payment request status:", error);
+                        vm.eventBus.emit("unfreeze");
+                        vm.eventBus.emit("show_message", {
+                          title: __("Error checking payment status"),
+                          color: "error",
+                        });
                       });
                   }, 30000);
+                } else {
+                  vm.eventBus.emit("unfreeze");
+                  vm.eventBus.emit("show_message", {
+                    title: __("Failed to create payment request"),
+                    color: "error",
+                  });
                 }
               },
-              error: function() {
+              error: function(error) {
+                console.error("Error creating payment request:", error);
                 vm.eventBus.emit("unfreeze");
                 vm.eventBus.emit("show_message", {
                   title: __("Payment request failed"),
@@ -1369,9 +1391,16 @@ export default {
                 });
               }
             });
+          } else {
+            vm.eventBus.emit("unfreeze");
+            vm.eventBus.emit("show_message", {
+              title: __("Failed to update invoice"),
+              color: "error",
+            });
           }
         },
-        error: function() {
+        error: function(error) {
+          console.error("Error updating invoice:", error);
           vm.eventBus.emit("unfreeze");
           vm.eventBus.emit("show_message", {
             title: __("Failed to update invoice"),
