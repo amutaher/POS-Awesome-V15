@@ -35,7 +35,7 @@ frappe.pages['posapp'].on_page_load = function (wrapper) {
 	// Register Service Worker for offline functionality
 	if ('serviceWorker' in navigator) {
 		window.addEventListener('load', () => {
-			navigator.serviceWorker.register('/posawesome/public/js/posapp/service-worker.js')
+			navigator.serviceWorker.register('/assets/posawesome/js/posapp/service-worker.js')
 				.then((registration) => {
 					console.log('Service Worker registered with scope:', registration.scope);
 					
