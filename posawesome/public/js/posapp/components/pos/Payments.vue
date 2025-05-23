@@ -6,7 +6,7 @@
       style="max-height: 76vh; height: 76vh">
       <v-progress-linear :active="loading" :indeterminate="loading" absolute location="top" color="info"></v-progress-linear>
       
-      <!-- Offline Mode Indicator - Only shown when offline -->
+      <!-- Offline Mode Indicator -->
       <v-alert
         v-if="isOffline"
         density="compact"
@@ -875,6 +875,12 @@ export default {
         });
       }
     },
+    isOffline(newValue, oldValue) {
+      if (!newValue && oldValue) {
+        // Connection restored, process pending payments
+        this.processPendingPayments();
+      }
+    }
   },
   methods: {
     // Go back to invoice view and reset customer readonly
@@ -1690,11 +1696,51 @@ export default {
       // All validations passed
       return true;
     },
+    updateOnlineStatus() {
+      this.isOffline = !navigator.onLine;
+    },
+    async processPendingPayments() {
+      if (!navigator.onLine) return;
+      
+      const pendingPayments = JSON.parse(localStorage.getItem('pendingPayments') || '[]');
+      if (!pendingPayments.length) return;
+      
+      for (const pendingPayment of pendingPayments) {
+        try {
+          await frappe.call({
+            method: 'posawesome.posawesome.api.posapp.submit_payment',
+            args: { 
+              payments: pendingPayment.payment,
+              invoice_name: pendingPayment.invoice 
+            },
+          });
+          
+          const remainingPayments = pendingPayments.filter(
+            pay => pay.timestamp !== pendingPayment.timestamp
+          );
+          localStorage.setItem('pendingPayments', JSON.stringify(remainingPayments));
+          
+          frappe.show_alert({
+            message: __('Offline payment processed successfully'),
+            indicator: 'green'
+          });
+        } catch (error) {
+          frappe.show_alert({
+            message: __('Failed to process offline payment: ') + error.message,
+            indicator: 'red'
+          });
+        }
+      }
+    }
   },
   // Lifecycle hook: created
   created() {
     // Register keyboard shortcut for payment
     document.addEventListener("keydown", this.shortPay.bind(this));
+    // Add offline detection
+    window.addEventListener('online', this.updateOnlineStatus);
+    window.addEventListener('offline', this.updateOnlineStatus);
+    this.updateOnlineStatus();
   },
   // Lifecycle hook: mounted
   mounted() {
@@ -1821,6 +1867,9 @@ export default {
     if (this.unsubscribeNetwork) {
       this.unsubscribeNetwork();
     }
+    // Remove event listeners
+    window.removeEventListener('online', this.updateOnlineStatus);
+    window.removeEventListener('offline', this.updateOnlineStatus);
   },
   // Lifecycle hook: unmounted
   unmounted() {
@@ -1850,8 +1899,7 @@ export default {
 
 /* Styling for offline mode */
 .offline-mode {
-  border: 2px solid #ffc107 !important;
-  position: relative;
+  border: 2px solid orange;
 }
 
 /* Label for offline mode card */
@@ -1860,7 +1908,7 @@ export default {
   position: absolute;
   top: 0;
   right: 0;
-  background-color: #ffc107;
+  background-color: orange;
   color: #212121;
   padding: 4px 12px;
   font-weight: bold;
