@@ -1879,49 +1879,50 @@ export default {
     },
 
     async update_items_details() {
+      // Skip if offline or no items
+      if (!navigator.onLine || !this.items?.length || !this.pos_profile) {
+        console.log('Skipping items update: offline or no items');
+        return;
+      }
+
       try {
-        // Skip in offline mode
-        if (!navigator.onLine) {
-          console.log('Skipping items update in offline mode');
-          return;
-        }
-
-        if (!this.items || !this.items.length) {
-          return;
-        }
-
-        const result = await frappe.call({
-          method: 'posawesome.posawesome.api.posapp.get_items_details',
-          args: { items: this.items },
+        const response = await frappe.call({
+          method: "posawesome.posawesome.api.posapp.get_items_details",
+          args: {
+            pos_profile: this.pos_profile,
+            items_data: this.items
+          }
         });
 
-        if (!result || !result.message) {
-          return;
+        if (response?.message) {
+          this.items = this.items.map(item => {
+            const updated_item = response.message.find(
+              element => element.posa_row_id === item.posa_row_id
+            );
+            if (updated_item) {
+              return {
+                ...item,
+                actual_qty: updated_item.actual_qty,
+                serial_no_data: updated_item.serial_no_data,
+                batch_no_data: updated_item.batch_no_data,
+                item_uoms: updated_item.item_uoms,
+                has_batch_no: updated_item.has_batch_no,
+                has_serial_no: updated_item.has_serial_no
+              };
+            }
+            return item;
+          });
         }
-
-        // Update items with new details
-        this.items = this.items.map(item => {
-          const updated_item = result.message.find(i => i.item_code === item.item_code);
-          return updated_item ? { ...item, ...updated_item } : item;
-        });
-
       } catch (error) {
-        console.error('Failed to update items details:', error);
         if (navigator.onLine) {
-          // Only show error if we're online - offline is expected to fail
-          this.showError('Failed to update items details');
+          console.error("Error updating items:", error);
+          this.showError("Error updating item details");
         }
       }
     },
 
     update_cur_items_details() {
-      // Skip in offline mode
-      if (!navigator.onLine) {
-        console.log('Skipping current items update in offline mode');
-        return;
-      }
-
-      if (this.items && this.items.length > 0) {
+      if (this.items?.length > 0 && navigator.onLine) {
         this.update_items_details();
       }
     },
@@ -4080,6 +4081,43 @@ export default {
       this.calc_stock_qty(item, item.qty);
       this.$forceUpdate();
     },
+
+    setupItemsUpdateInterval() {
+      // Clear existing interval if any
+      this.clearItemsUpdateInterval();
+      
+      // Set new interval only if online
+      if (navigator.onLine) {
+        this.update_interval = setInterval(() => {
+          this.update_cur_items_details();
+        }, 60000);
+      }
+    },
+
+    clearItemsUpdateInterval() {
+      if (this.update_interval) {
+        clearInterval(this.update_interval);
+        this.update_interval = null;
+      }
+    },
+
+    handleOnline() {
+      console.log('Connection restored, setting up items update');
+      this.setupItemsUpdateInterval();
+      this.update_cur_items_details(); // Initial update
+    },
+
+    handleOffline() {
+      console.log('Connection lost, clearing items update');
+      this.clearItemsUpdateInterval();
+    },
+
+    showError(message) {
+      this.eventBus.emit("show_message", {
+        title: __(message),
+        color: "error"
+      });
+    },
   },
 
   mounted() {
@@ -4209,6 +4247,15 @@ export default {
     window.addEventListener('online', () => {
       this.update_cur_items_details();
     });
+
+    // Setup items update interval only if online
+    if (navigator.onLine) {
+      this.setupItemsUpdateInterval();
+    }
+
+    // Listen for online/offline events
+    window.addEventListener('online', this.handleOnline);
+    window.addEventListener('offline', this.handleOffline);
   },
   // Cleanup event listeners before component is destroyed
   beforeUnmount() {
@@ -4224,6 +4271,10 @@ export default {
       clearInterval(this.update_interval);
     }
     window.removeEventListener('online', this.update_cur_items_details);
+    // Clear interval and remove listeners
+    this.clearItemsUpdateInterval();
+    window.removeEventListener('online', this.handleOnline);
+    window.removeEventListener('offline', this.handleOffline);
   },
   // Register global keyboard shortcuts when component is created
   created() {
