@@ -164,6 +164,11 @@ export default {
     },
     async submitInvoice(invoice) {
       try {
+        // Add offline check
+        if (!this.isOnline) {
+          console.log('Processing offline invoice:', invoice);
+        }
+
         const result = await api.apiCall(
           'posawesome.posawesome.api.posapp.submit_invoice',
           { invoice },
@@ -176,16 +181,110 @@ export default {
           if (result.invoice_id) {
             localStorage.setItem('last_offline_invoice_id', result.invoice_id);
           }
+          // Store invoice data for offline use
+          localStorage.setItem('last_offline_invoice', JSON.stringify(invoice));
           // Emit event to update UI
-          this.eventBus.emit('invoice_saved_offline');
+          this.eventBus.emit('invoice_saved_offline', invoice);
+          // Clear current invoice
+          this.eventBus.emit('reset_current_invoice');
           return result;
         } else {
           this.showSuccess('Invoice submitted successfully');
           return result;
         }
       } catch (error) {
+        console.error('Invoice submission error:', error);
         this.showError('Failed to submit invoice: ' + error.message);
         throw error;
+      }
+    },
+    async processInvoice(invoice, payments) {
+      try {
+        console.log('Processing invoice with payments:', payments);
+        
+        // Add payments to invoice
+        invoice.payments = payments;
+        
+        // Handle offline mode
+        if (!this.isOnline) {
+          console.log('Processing invoice in offline mode');
+          const result = await this.submitInvoice(invoice);
+          if (result.offline) {
+            return {
+              success: true,
+              offline: true,
+              message: result.message
+            };
+          }
+        }
+        
+        // Online mode processing
+        const result = await this.submitInvoice(invoice);
+        return {
+          success: true,
+          message: 'Invoice processed successfully'
+        };
+      } catch (error) {
+        console.error('Process invoice error:', error);
+        return {
+          success: false,
+          message: error.message
+        };
+      }
+    },
+    async show_payment(invoice_data) {
+      try {
+        console.log('Starting show_payment process');
+        console.log('Invoice state before payment:', invoice_data);
+
+        // Basic validations
+        if (!invoice_data || !invoice_data.items_count) {
+          this.showError('No items in invoice');
+          return;
+        }
+
+        console.log('Basic validations passed, proceeding to main validation');
+        
+        // Main validation
+        const isValid = await this.validate_invoice(invoice_data);
+        console.log('Main validation result:', isValid);
+        
+        if (!isValid) {
+          return;
+        }
+
+        // Process based on invoice type
+        if (invoice_data.is_return) {
+          console.log('Processing return invoice');
+          // Handle return invoice
+          const return_result = await this.process_return(invoice_data);
+          if (!return_result.success) {
+            this.showError(return_result.message);
+            return;
+          }
+        } else {
+          console.log('Processing regular invoice');
+          // Generate payments
+          const payments = await this.generate_payments(invoice_data);
+          console.log('Generated payments:', payments);
+
+          // Process invoice with payments
+          const process_result = await this.processInvoice(invoice_data, payments);
+          if (!process_result.success) {
+            console.log('Failed to process invoice');
+            this.showError(process_result.message);
+            return;
+          }
+
+          if (process_result.offline) {
+            this.showInfo('Invoice saved offline');
+          } else {
+            this.showSuccess('Invoice processed successfully');
+          }
+        }
+      } catch (error) {
+        console.error('Show payment error:', error);
+        this.showError('Failed to process payment: ' + error.message);
       }
     },
     async syncOfflineData() {
