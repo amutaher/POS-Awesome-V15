@@ -58,9 +58,10 @@ export default {
       payment: false,
       offers: false,
       coupons: false,
-      isOnline: true,
+      isOnline: navigator.onLine,
       offlineMode: false,
       syncStatus: 'synced',
+      updateInterval: null,
     };
   },
 
@@ -99,13 +100,17 @@ export default {
       }
     },
     setupNetworkListeners() {
-      this.isOnline = navigator.onLine;
       window.addEventListener('online', () => {
+        console.log('Browser went online');
         this.isOnline = true;
         this.syncOfflineData();
+        this.startUpdateInterval();
       });
+      
       window.addEventListener('offline', () => {
+        console.log('Browser went offline');
         this.isOnline = false;
+        this.stopUpdateInterval();
       });
     },
     async searchItems(query) {
@@ -213,7 +218,8 @@ export default {
             ...invoice,
             offline: true,
             created_at: new Date().toISOString(),
-            status: 'pending'
+            status: 'pending',
+            pos_profile: this.pos_profile ? this.pos_profile.name : null
           };
           
           // Store in localStorage
@@ -224,6 +230,9 @@ export default {
           // Emit events
           this.eventBus.emit('invoice_saved_offline', offlineInvoice);
           this.eventBus.emit('reset_current_invoice');
+          
+          // Clear current invoice state
+          this.clear_current_invoice();
           
           return {
             success: true,
@@ -453,7 +462,9 @@ export default {
     clear_current_invoice() {
       // Reset invoice related data
       this.eventBus.emit('reset_current_invoice');
-      // Any other cleanup needed
+      this.payment = false;
+      this.offers = false;
+      this.coupons = false;
     },
     // Override the update_items_details method to handle offline mode
     async update_items_details() {
@@ -461,15 +472,35 @@ export default {
         console.log('Skipping items update in offline mode');
         return;
       }
-      // Original update logic for online mode
-      await this.update_cur_items_details();
+      try {
+        await this.update_cur_items_details();
+      } catch (error) {
+        console.error('Failed to update items:', error);
+      }
+    },
+    startUpdateInterval() {
+      if (this.updateInterval) {
+        clearInterval(this.updateInterval);
+      }
+      if (this.isOnline) {
+        this.updateInterval = setInterval(() => {
+          this.update_items_details();
+        }, 60000); // Update every minute when online
+      }
+    },
+    stopUpdateInterval() {
+      if (this.updateInterval) {
+        clearInterval(this.updateInterval);
+        this.updateInterval = null;
+      }
     },
   },
 
   mounted: function () {
     this.$nextTick(function () {
-      this.initializeApp();
       this.setupNetworkListeners();
+      this.startUpdateInterval();
+      this.initializeApp();
       this.check_opening_entry();
       this.get_pos_setting();
       this.eventBus.on('close_opening_dialog', () => {
@@ -513,6 +544,9 @@ export default {
     this.eventBus.off('show_coupons');
     this.eventBus.off('open_closing_dialog');
     this.eventBus.off('submit_closing_pos');
+    this.stopUpdateInterval();
+    window.removeEventListener('online', this.setupNetworkListeners);
+    window.removeEventListener('offline', this.setupNetworkListeners);
   },
 };
 </script>
