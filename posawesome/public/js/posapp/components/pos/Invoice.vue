@@ -1644,7 +1644,6 @@ export default {
           
           // Show payment dialog
           console.log('Showing payment dialog with currency:', invoice_data.currency);
-          this.eventBus.emit("show_payment", "true");
           
           if (!navigator.onLine) {
             // For offline mode, set default cash payment
@@ -1654,11 +1653,20 @@ export default {
               currency: invoice_data.currency
             }];
             invoice_data.payments = payments;
-            this.eventBus.emit("send_invoice_doc_payment", invoice_data);
+            
+            // Skip API calls in offline mode
+            this.eventBus.emit("show_payment", {
+              offline: true,
+              invoice_data: invoice_data
+            });
+            
             this.showInfo('Invoice will be processed when online');
           } else {
             // For online mode, send current invoice doc
-            this.eventBus.emit("send_invoice_doc_payment", this.invoice_doc);
+            this.eventBus.emit("show_payment", {
+              offline: false,
+              invoice_doc: this.invoice_doc
+            });
           }
         }
       } catch (error) {
