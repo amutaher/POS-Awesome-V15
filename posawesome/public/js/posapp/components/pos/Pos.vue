@@ -208,14 +208,28 @@ export default {
         // Handle offline mode
         if (!this.isOnline) {
           console.log('Processing invoice in offline mode');
-          const result = await this.submitInvoice(invoice);
-          if (result.offline) {
-            return {
-              success: true,
-              offline: true,
-              message: result.message
-            };
-          }
+          // Save invoice locally without making API calls
+          const offlineInvoice = {
+            ...invoice,
+            offline: true,
+            created_at: new Date().toISOString(),
+            status: 'pending'
+          };
+          
+          // Store in localStorage
+          const offlineInvoices = JSON.parse(localStorage.getItem('offline_invoices') || '[]');
+          offlineInvoices.push(offlineInvoice);
+          localStorage.setItem('offline_invoices', JSON.stringify(offlineInvoices));
+          
+          // Emit events
+          this.eventBus.emit('invoice_saved_offline', offlineInvoice);
+          this.eventBus.emit('reset_current_invoice');
+          
+          return {
+            success: true,
+            offline: true,
+            message: 'Invoice saved offline. Will sync when online.'
+          };
         }
         
         // Online mode processing
@@ -245,9 +259,12 @@ export default {
 
         console.log('Basic validations passed, proceeding to main validation');
         
-        // Main validation
-        const isValid = await this.validate_invoice(invoice_data);
-        console.log('Main validation result:', isValid);
+        // Skip online validations in offline mode
+        let isValid = true;
+        if (this.isOnline) {
+          isValid = await this.validate_invoice(invoice_data);
+          console.log('Main validation result:', isValid);
+        }
         
         if (!isValid) {
           return;
@@ -255,6 +272,10 @@ export default {
 
         // Process based on invoice type
         if (invoice_data.is_return) {
+          if (!this.isOnline) {
+            this.showError('Return invoices cannot be processed offline');
+            return;
+          }
           console.log('Processing return invoice');
           // Handle return invoice
           const return_result = await this.process_return(invoice_data);
@@ -264,8 +285,13 @@ export default {
           }
         } else {
           console.log('Processing regular invoice');
-          // Generate payments
-          const payments = await this.generate_payments(invoice_data);
+          // Generate payments without API calls in offline mode
+          let payments;
+          if (this.isOnline) {
+            payments = await this.generate_payments(invoice_data);
+          } else {
+            payments = this.generate_offline_payments(invoice_data);
+          }
           console.log('Generated payments:', payments);
 
           // Process invoice with payments
@@ -278,6 +304,8 @@ export default {
 
           if (process_result.offline) {
             this.showInfo('Invoice saved offline');
+            // Clear current invoice data
+            this.clear_current_invoice();
           } else {
             this.showSuccess('Invoice processed successfully');
           }
@@ -411,6 +439,30 @@ export default {
       frappe.db.get_doc('POS Settings', undefined).then((doc) => {
         this.eventBus.emit('set_pos_settings', doc);
       });
+    },
+    // Helper method for offline payments
+    generate_offline_payments(invoice_data) {
+      return [{
+        mode_of_payment: 'Cash',
+        amount: invoice_data.grand_total,
+        currency: invoice_data.currency || 'INR',
+        offline: true
+      }];
+    },
+    // Helper method to clear current invoice
+    clear_current_invoice() {
+      // Reset invoice related data
+      this.eventBus.emit('reset_current_invoice');
+      // Any other cleanup needed
+    },
+    // Override the update_items_details method to handle offline mode
+    async update_items_details() {
+      if (!this.isOnline) {
+        console.log('Skipping items update in offline mode');
+        return;
+      }
+      // Original update logic for online mode
+      await this.update_cur_items_details();
     },
   },
 
