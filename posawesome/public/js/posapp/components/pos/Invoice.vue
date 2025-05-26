@@ -1570,13 +1570,50 @@ export default {
       }
     },
 
-    async show_payment(invoice_data) {
+    // Helper methods for showing messages
+    showError(message) {
+      this.eventBus.emit("show_message", {
+        title: __(message),
+        color: "error",
+      });
+    },
+
+    showInfo(message) {
+      this.eventBus.emit("show_message", {
+        title: __(message),
+        color: "info",
+      });
+    },
+
+    showSuccess(message) {
+      this.eventBus.emit("show_message", {
+        title: __(message),
+        color: "success",
+      });
+    },
+
+    async show_payment(event) {
       try {
         console.log('Starting show_payment process');
+        
+        // Get current invoice data instead of using event
+        const invoice_data = {
+          items_count: this.items.length,
+          customer: this.customer,
+          is_return: this.invoice_doc ? this.invoice_doc.is_return : false,
+          currency: this.selected_currency || this.pos_profile.currency,
+          grand_total: this.subtotal
+        };
+        
         console.log('Invoice state before payment:', invoice_data);
 
         // Basic validations
-        if (!invoice_data || !invoice_data.items_count) {
+        if (!invoice_data.customer) {
+          this.showError('Select a customer');
+          return;
+        }
+
+        if (!invoice_data.items_count) {
           this.showError('No items in invoice');
           return;
         }
@@ -1586,7 +1623,7 @@ export default {
         // Skip online validations in offline mode
         let isValid = true;
         if (navigator.onLine) {
-          isValid = await this.validate_invoice(invoice_data);
+          isValid = await this.validate();
           console.log('Main validation result:', isValid);
         }
         
@@ -1601,68 +1638,33 @@ export default {
             return;
           }
           console.log('Processing return invoice');
-          // Handle return invoice
-          const return_result = await this.process_return(invoice_data);
-          if (!return_result.success) {
-            this.showError(return_result.message);
-            return;
-          }
+          await this.process_return();
         } else {
           console.log('Processing regular invoice');
-          // Generate payments without API calls in offline mode
-          let payments;
-          if (navigator.onLine) {
-            payments = await this.generate_payments(invoice_data);
-          } else {
-            payments = [{
+          
+          // Show payment dialog
+          console.log('Showing payment dialog with currency:', invoice_data.currency);
+          this.eventBus.emit("show_payment", "true");
+          
+          if (!navigator.onLine) {
+            // For offline mode, set default cash payment
+            const payments = [{
               mode_of_payment: 'Cash',
               amount: invoice_data.grand_total,
-              currency: invoice_data.currency || 'PKR'
+              currency: invoice_data.currency
             }];
-          }
-          console.log('Generated payments:', payments);
-
-          // Add payments to invoice data
-          invoice_data.payments = payments;
-          console.log('Final payment data:', invoice_data.payments);
-
-          // Show payment dialog with currency
-          console.log('Showing payment dialog with currency:', invoice_data.currency || 'PKR');
-          
-          // Skip sales person fetch in offline mode
-          if (!navigator.onLine) {
-            this.eventBus.emit('show_payment', 'true');
-            return;
-          }
-
-          // Process payment
-          const process_result = await this.process_invoice(invoice_data);
-          if (!process_result.success && !process_result.offline) {
-            console.log('Failed to process invoice');
-            this.showError(process_result.message);
-            return;
-          }
-
-          if (process_result.offline) {
-            this.showInfo('Invoice saved for offline processing');
-            this.clear_current_invoice();
+            invoice_data.payments = payments;
+            this.eventBus.emit("send_invoice_doc_payment", invoice_data);
+            this.showInfo('Invoice will be processed when online');
           } else {
-            this.showSuccess('Invoice processed successfully');
+            // For online mode, send current invoice doc
+            this.eventBus.emit("send_invoice_doc_payment", this.invoice_doc);
           }
         }
       } catch (error) {
         console.error('Show payment error:', error);
         if (!navigator.onLine) {
-          // If offline, try to save as offline invoice
-          const payments = [{
-            mode_of_payment: 'Cash',
-            amount: invoice_data.grand_total,
-            currency: invoice_data.currency || 'PKR'
-          }];
-          invoice_data.payments = payments;
-          await this.process_invoice(invoice_data);
           this.showInfo('Invoice saved for offline processing');
-          this.clear_current_invoice();
         } else {
           this.showError('Failed to process payment: ' + error.message);
         }
