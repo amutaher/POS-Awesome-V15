@@ -10,7 +10,7 @@ db.version(1).stores({
   invoices: '++id, name, createdAt, status',
   priceLists: 'name, currency',
   taxRules: 'name',
-  pos_profile: 'name'
+  pos_profile: 'name, pos_profile_name, company, warehouse'
 });
 
 // Items operations
@@ -97,10 +97,20 @@ export const TaxRulesDB = {
 // POS Profile operations
 export const PosProfileDB = {
   async savePosProfile(profile) {
-    return db.pos_profile.put(profile);
+    return db.pos_profile.put({
+      name: profile.name,
+      pos_profile_name: profile.pos_profile_name,
+      company: profile.company,
+      warehouse: profile.warehouse,
+      ...profile
+    });
   },
   async getPosProfile() {
     return db.pos_profile.toArray();
+  },
+  async getCurrentProfile() {
+    const profiles = await db.pos_profile.toArray();
+    return profiles.length > 0 ? profiles[0] : null;
   }
 };
 

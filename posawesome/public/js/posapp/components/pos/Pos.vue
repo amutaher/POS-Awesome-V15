@@ -32,6 +32,7 @@
 <script>
 import api from '../../services/api';
 import { ItemsDB, CustomersDB } from '../../services/db';
+import { PosProfileDB } from '../../services/db';
 
 import ItemsSelector from './ItemsSelector.vue';
 import Invoice from './Invoice.vue';
@@ -83,6 +84,14 @@ export default {
   methods: {
     async initializeApp() {
       try {
+        // First check for offline profile
+        const offlineProfile = await PosProfileDB.getCurrentProfile();
+        if (offlineProfile) {
+          this.pos_profile = offlineProfile;
+          this.eventBus.emit('register_pos_profile', offlineProfile);
+        }
+        
+        // Then try to sync
         const syncResult = await api.initialSync();
         if (!syncResult.success) {
           this.showError('Failed to sync data: ' + syncResult.message);
@@ -186,7 +195,17 @@ export default {
         indicator: 'blue'
       });
     },
-    check_opening_entry() {
+    async check_opening_entry() {
+      if (!this.isOnline) {
+        // Use offline profile if available
+        const offlineProfile = await PosProfileDB.getCurrentProfile();
+        if (offlineProfile) {
+          this.pos_profile = offlineProfile;
+          this.eventBus.emit('register_pos_profile', offlineProfile);
+          return;
+        }
+      }
+      
       return frappe
         .call('posawesome.posawesome.api.posapp.check_opening_shift', {
           user: frappe.session.user,
@@ -195,6 +214,10 @@ export default {
           if (r.message) {
             this.pos_profile = r.message.pos_profile;
             this.pos_opening_shift = r.message.pos_opening_shift;
+            
+            // Save profile for offline use
+            PosProfileDB.savePosProfile(r.message.pos_profile);
+            
             this.get_offers(this.pos_profile.name);
             this.eventBus.emit('register_pos_profile', r.message);
             this.eventBus.emit('set_company', r.message.company);

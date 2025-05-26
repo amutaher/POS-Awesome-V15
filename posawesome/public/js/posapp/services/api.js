@@ -31,6 +31,14 @@ function showOfflineStatus() {
 export async function apiCall(method, args = {}, options = {}) {
   const { isInvoice = false, offlineSupport = false, syncData = false } = options;
   
+  // Add POS profile to args if not present
+  if (!args.pos_profile && method.includes('get_items')) {
+    const currentProfile = await PosProfileDB.getCurrentProfile();
+    if (currentProfile) {
+      args.pos_profile = currentProfile.name;
+    }
+  }
+  
   if (isOnline) {
     try {
       const response = await frappe.call({
