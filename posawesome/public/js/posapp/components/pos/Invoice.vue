@@ -1873,41 +1873,51 @@ export default {
       this.eventBus.emit("show_payment", "false");
     },
 
-    // Update details for all items (fetch from backend)
-    async update_items_details(items) {
-      if (!items?.length) return;
-      if (!this.pos_profile) return;
-
+    async update_items_details() {
       try {
-        const response = await frappe.call({
-          method: "posawesome.posawesome.api.posapp.get_items_details",
-          args: {
-            pos_profile: this.pos_profile,
-            items_data: items
-          }
+        // Skip in offline mode
+        if (!navigator.onLine) {
+          console.log('Skipping items update in offline mode');
+          return;
+        }
+
+        if (!this.items || !this.items.length) {
+          return;
+        }
+
+        const result = await frappe.call({
+          method: 'posawesome.posawesome.api.posapp.get_items_details',
+          args: { items: this.items },
         });
 
-        if (response?.message) {
-          items.forEach((item) => {
-            const updated_item = response.message.find(
-              (element) => element.posa_row_id == item.posa_row_id
-            );
-            if (updated_item) {
-              item.actual_qty = updated_item.actual_qty;
-              item.serial_no_data = updated_item.serial_no_data;
-              item.batch_no_data = updated_item.batch_no_data;
-              item.item_uoms = updated_item.item_uoms;
-              item.has_batch_no = updated_item.has_batch_no;
-              item.has_serial_no = updated_item.has_serial_no;
-            }
-          });
+        if (!result || !result.message) {
+          return;
         }
-      } catch (error) {
-        console.error("Error updating items:", error);
-        this.eventBus.emit("show_message", {
-          title: __("Error updating item details"),
-          color: "error"
+
+        // Update items with new details
+        this.items = this.items.map(item => {
+          const updated_item = result.message.find(i => i.item_code === item.item_code);
+          return updated_item ? { ...item, ...updated_item } : item;
         });
+
+      } catch (error) {
+        console.error('Failed to update items details:', error);
+        if (navigator.onLine) {
+          // Only show error if we're online - offline is expected to fail
+          this.showError('Failed to update items details');
+        }
+      }
+    },
+
+    update_cur_items_details() {
+      // Skip in offline mode
+      if (!navigator.onLine) {
+        console.log('Skipping current items update in offline mode');
+        return;
+      }
+
+      if (this.items && this.items.length > 0) {
+        this.update_items_details();
       }
     },
 
