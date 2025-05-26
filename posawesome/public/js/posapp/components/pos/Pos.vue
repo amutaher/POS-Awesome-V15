@@ -139,15 +139,21 @@ export default {
         }
 
         if (this.isOnline) {
-          const result = await api.apiCall(
-            'posawesome.posawesome.api.posapp.get_customers',
-            { 
-              query,
-              pos_profile: JSON.stringify(this.pos_profile)
-            },
-            { syncData: true }
-          );
-          return result.message;
+          // Use Frappe API to search customers
+          const result = await frappe.db.get_list('Customer', {
+            fields: ['name', 'customer_name'],
+            filters: [
+              ['customer_name', 'like', '%' + query + '%']
+            ],
+            limit: 20
+          });
+          
+          if (result) {
+            // Save to IndexedDB for offline use
+            await CustomersDB.saveCustomers(result);
+            return result;
+          }
+          return [];
         } else {
           return await CustomersDB.searchCustomers(query);
         }

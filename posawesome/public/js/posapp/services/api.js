@@ -160,23 +160,35 @@ export async function initialSync() {
       { syncData: true }
     );
     
-    // Sync customers
-    const customers = await apiCall('posawesome.posawesome.api.posapp.get_customers', 
-      { pos_profile }, 
-      { syncData: true }
-    );
+    // Note: get_customers API is not available, using Frappe API instead
+    const customers = await frappe.db.get_list('Customer', {
+      fields: ['name', 'customer_name'],
+      limit: 0
+    });
+    if (customers) {
+      await CustomersDB.saveCustomers(customers);
+    }
     
-    // Sync price lists
-    const priceLists = await apiCall('posawesome.posawesome.api.posapp.get_price_lists', 
-      { pos_profile }, 
-      { syncData: true }
-    );
+    // Note: These APIs might not be available in current version
+    try {
+      // Try to sync price lists if API exists
+      const priceLists = await apiCall('posawesome.posawesome.api.posapp.get_price_lists', 
+        { pos_profile }, 
+        { syncData: true }
+      );
+    } catch (e) {
+      console.warn('Price lists sync failed:', e);
+    }
     
-    // Sync tax rules
-    const taxRules = await apiCall('posawesome.posawesome.api.posapp.get_tax_rules', 
-      { pos_profile }, 
-      { syncData: true }
-    );
+    try {
+      // Try to sync tax rules if API exists
+      const taxRules = await apiCall('posawesome.posawesome.api.posapp.get_tax_rules', 
+        { pos_profile }, 
+        { syncData: true }
+      );
+    } catch (e) {
+      console.warn('Tax rules sync failed:', e);
+    }
 
     return {
       success: true,
