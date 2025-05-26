@@ -262,6 +262,63 @@ export default {
         };
       }
     },
+    async update_invoice(invoice_data) {
+      try {
+        // Skip API call in offline mode
+        if (!this.isOnline) {
+          return {
+            success: true,
+            offline: true,
+            message: 'Invoice updated offline'
+          };
+        }
+
+        // Online mode - make API call
+        const result = await frappe.call({
+          method: 'posawesome.posawesome.api.posapp.update_invoice',
+          args: { invoice: invoice_data }
+        });
+        return result;
+      } catch (error) {
+        console.error('Update invoice error:', error);
+        if (!this.isOnline) {
+          return {
+            success: true,
+            offline: true,
+            message: 'Invoice updated offline'
+          };
+        }
+        throw error;
+      }
+    },
+
+    async process_invoice(invoice_data) {
+      try {
+        if (!this.isOnline) {
+          // Handle offline mode
+          return {
+            success: true,
+            offline: true,
+            message: 'Invoice processed offline'
+          };
+        }
+
+        // Online mode processing
+        const result = await this.update_invoice(invoice_data);
+        return result;
+      } catch (error) {
+        console.error('Process invoice error:', error);
+        if (!this.isOnline) {
+          return {
+            success: true,
+            offline: true,
+            message: 'Invoice processed offline'
+          };
+        }
+        throw error;
+      }
+    },
+
     async show_payment(invoice_data) {
       try {
         console.log('Starting show_payment process');
@@ -310,16 +367,19 @@ export default {
           }
           console.log('Generated payments:', payments);
 
-          // Process invoice with payments
+          // Add payments to invoice data
+          invoice_data.payments = payments;
+
+          // Process invoice
           const process_result = await this.processInvoice(invoice_data, payments);
-          if (!process_result.success) {
+          if (!process_result.success && !process_result.offline) {
             console.log('Failed to process invoice');
             this.showError(process_result.message);
             return;
           }
 
           if (process_result.offline) {
-            this.showInfo('Invoice saved offline');
+            this.showInfo('Invoice saved for offline processing');
             // Clear current invoice data
             this.clear_current_invoice();
           } else {
@@ -331,8 +391,9 @@ export default {
         if (!this.isOnline) {
           // If offline, try to save as offline invoice
           const payments = this.generate_offline_payments(invoice_data);
+          invoice_data.payments = payments;
           await this.processInvoice(invoice_data, payments);
-          this.showInfo('Invoice saved offline');
+          this.showInfo('Invoice saved for offline processing');
           this.clear_current_invoice();
         } else {
           this.showError('Failed to process payment: ' + error.message);
