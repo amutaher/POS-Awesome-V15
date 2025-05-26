@@ -1486,21 +1486,32 @@ export default {
     },
 
     // Update invoice in backend
-    update_invoice(doc) {
-      var vm = this;
-      frappe.call({
-        method: "posawesome.posawesome.api.posapp.update_invoice",
-        args: {
-          data: doc,
-        },
-        async: false,
-        callback: function (r) {
-          if (r.message) {
-            vm.invoice_doc = r.message;
-          }
-        },
-      });
-      return this.invoice_doc;
+    async update_invoice(invoice) {
+      try {
+        // Check for offline mode
+        if (!navigator.onLine) {
+          return {
+            success: true,
+            offline: true,
+            message: 'Invoice updated offline'
+          };
+        }
+        const result = await frappe.call({
+          method: 'posawesome.posawesome.api.posapp.update_invoice',
+          args: { invoice },
+        });
+        return result;
+      } catch (error) {
+        console.error('Update invoice error:', error);
+        if (!navigator.onLine) {
+          return {
+            success: true,
+            offline: true,
+            message: 'Invoice updated offline'
+          };
+        }
+        throw error;
+      }
     },
 
     // Update invoice from order in backend
@@ -1522,40 +1533,28 @@ export default {
     },
 
     // Process and save invoice (handles update or create)
-    process_invoice() {
-      const doc = this.get_invoice_doc();
-      if (doc.name) {
-        try {
-          const updated_doc = this.update_invoice(doc);
-          // Update posting date after invoice update
-          if (updated_doc && updated_doc.posting_date) {
-            this.posting_date = updated_doc.posting_date;
-          }
-          return updated_doc;
-        } catch (error) {
-          console.error('Error in process_invoice:', error);
-          this.eventBus.emit('show_message', {
-            title: __(error.message || 'Error processing invoice'),
-            color: 'error'
-          });
-          return false;
+    async process_invoice() {
+      try {
+        // Check for offline mode
+        if (!navigator.onLine) {
+          return {
+            success: true,
+            offline: true,
+            message: 'Invoice processed offline'
+          };
         }
-      } else {
-        try {
-          const updated_doc = this.update_invoice(doc);
-          // Update posting date after invoice creation
-          if (updated_doc && updated_doc.posting_date) {
-            this.posting_date = updated_doc.posting_date;
-          }
-          return updated_doc;
-        } catch (error) {
-          console.error('Error in process_invoice:', error);
-          this.eventBus.emit('show_message', {
-            title: __(error.message || 'Error processing invoice'),
-            color: 'error'
-          });
-          return false;
+        const result = await this.update_invoice(this.invoice);
+        return result;
+      } catch (error) {
+        console.error('Process invoice error:', error);
+        if (!navigator.onLine) {
+          return {
+            success: true,
+            offline: true,
+            message: 'Invoice processed offline'
+          };
         }
+        throw error;
       }
     },
 
@@ -4207,6 +4206,14 @@ export default {
     document.addEventListener("keydown", this.shortDeleteFirstItem.bind(this));
     document.addEventListener("keydown", this.shortOpenFirstItem.bind(this));
     document.addEventListener("keydown", this.shortSelectDiscount.bind(this));
+    // Only set interval if online
+    if (navigator.onLine) {
+      setInterval(() => {
+        if (navigator.onLine) {
+          this.update_items_details();
+        }
+      }, 60000);
+    }
   },
   // Remove global keyboard shortcuts when component is unmounted
   unmounted() {
