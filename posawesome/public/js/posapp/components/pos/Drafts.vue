@@ -93,6 +93,116 @@ export default {
       this.draftsDialog = false;
     },
 
+    async get_sales_person_names() {
+      try {
+        // Skip in offline mode
+        if (!navigator.onLine) {
+          return [];
+        }
+        const result = await frappe.call({
+          method: 'posawesome.posawesome.api.posapp.get_sales_person_names',
+        });
+        return result.message || [];
+      } catch (error) {
+        console.error('Error getting sales persons:', error);
+        return [];
+      }
+    },
+
+    async submit_invoice(invoice_data) {
+      try {
+        // Handle offline mode
+        if (!navigator.onLine) {
+          // Store draft for offline processing
+          const offlineDraft = {
+            ...invoice_data,
+            created_at: new Date().toISOString(),
+            status: 'pending'
+          };
+          
+          // Store in localStorage
+          const offlineDrafts = JSON.parse(localStorage.getItem('offline_drafts') || '[]');
+          offlineDrafts.push(offlineDraft);
+          localStorage.setItem('offline_drafts', JSON.stringify(offlineDrafts));
+          
+          return {
+            success: true,
+            offline: true,
+            message: 'Draft saved for offline processing'
+          };
+        }
+
+        // Online mode
+        const result = await frappe.call({
+          method: 'posawesome.posawesome.api.posapp.submit_invoice',
+          args: { invoice: invoice_data },
+        });
+        return result;
+      } catch (error) {
+        console.error('Error submitting invoice:', error);
+        if (!navigator.onLine) {
+          return {
+            success: true,
+            offline: true,
+            message: 'Draft saved for offline processing'
+          };
+        }
+        throw error;
+      }
+    },
+
+    async submit() {
+      try {
+        if (!this.invoice_doc) {
+          this.showError('No invoice to submit');
+          return;
+        }
+
+        // Handle offline mode
+        if (!navigator.onLine) {
+          const result = await this.submit_invoice(this.invoice_doc);
+          if (result.offline) {
+            this.showInfo(result.message);
+            this.$emit('close');
+            return;
+          }
+        }
+
+        // Online mode
+        const result = await this.submit_invoice(this.invoice_doc);
+        if (result.success) {
+          this.showSuccess('Invoice submitted successfully');
+          this.$emit('close');
+        } else {
+          this.showError(result.message || 'Failed to submit invoice');
+        }
+      } catch (error) {
+        console.error('Submit error:', error);
+        this.showError('Failed to submit: ' + error.message);
+      }
+    },
+
+    showSuccess(message) {
+      this.eventBus.emit('show_message', {
+        title: __(message),
+        color: 'success'
+      });
+    },
+
+    showError(message) {
+      this.eventBus.emit('show_message', {
+        title: __(message),
+        color: 'error'
+      });
+    },
+
+    showInfo(message) {
+      this.eventBus.emit('show_message', {
+        title: __(message),
+        color: 'info'
+      });
+    },
+
     submit_dialog() {
 
       if (this.selected.length > 0) {
