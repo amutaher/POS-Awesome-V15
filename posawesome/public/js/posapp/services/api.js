@@ -36,23 +36,27 @@ export async function apiCall(method, args = {}, options = {}) {
     const currentProfile = await PosProfileDB.getCurrentProfile();
     if (currentProfile) {
       args.pos_profile = currentProfile.name;
+    } else {
+      throw new Error('POS Profile not found. Please open POS from the desk.');
     }
   }
   
   if (isOnline) {
     try {
+      console.log('Making API call:', method, 'with args:', args); // Debug log
       const response = await frappe.call({
         method,
         args
       });
 
       // If this is a data sync request, store in IndexedDB
-      if (syncData) {
+      if (syncData && response.message) {
         await syncToIndexedDB(method, response.message);
       }
 
       return response;
     } catch (error) {
+      console.error('API call failed:', error); // Debug log
       if (isInvoice) {
         // If invoice creation fails, queue it
         await InvoicesDB.addInvoice({
@@ -135,20 +139,37 @@ export async function initialSync() {
   if (!isOnline) return;
 
   try {
-    // Sync items
-    const items = await apiCall('posawesome.posawesome.api.posapp.get_items', {}, { syncData: true });
+    // Get current POS profile first
+    const currentProfile = await PosProfileDB.getCurrentProfile();
+    if (!currentProfile) {
+      throw new Error('POS Profile not found. Please open POS from the desk.');
+    }
+
+    const pos_profile = currentProfile.name;
+
+    // Sync items with POS profile
+    const items = await apiCall('posawesome.posawesome.api.posapp.get_items', 
+      { pos_profile }, 
+      { syncData: true }
+    );
     
     // Sync customers
-    const customers = await apiCall('posawesome.posawesome.api.posapp.get_customers', {}, { syncData: true });
+    const customers = await apiCall('posawesome.posawesome.api.posapp.get_customers', 
+      { pos_profile }, 
+      { syncData: true }
+    );
     
     // Sync price lists
-    const priceLists = await apiCall('posawesome.posawesome.api.posapp.get_price_lists', {}, { syncData: true });
+    const priceLists = await apiCall('posawesome.posawesome.api.posapp.get_price_lists', 
+      { pos_profile }, 
+      { syncData: true }
+    );
     
     // Sync tax rules
-    const taxRules = await apiCall('posawesome.posawesome.api.posapp.get_tax_rules', {}, { syncData: true });
-    
-    // Sync POS profile
-    const posProfile = await apiCall('posawesome.posawesome.api.posapp.get_pos_profile', {}, { syncData: true });
+    const taxRules = await apiCall('posawesome.posawesome.api.posapp.get_tax_rules', 
+      { pos_profile }, 
+      { syncData: true }
+    );
 
     return {
       success: true,
@@ -158,7 +179,7 @@ export async function initialSync() {
     console.error('Initial sync failed:', error);
     return {
       success: false,
-      message: 'Initial sync failed: ' + error.message
+      message: error.message || 'Initial sync failed'
     };
   }
 }

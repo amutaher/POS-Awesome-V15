@@ -84,17 +84,15 @@ export default {
   methods: {
     async initializeApp() {
       try {
-        // First check for offline profile
-        const offlineProfile = await PosProfileDB.getCurrentProfile();
-        if (offlineProfile) {
-          this.pos_profile = offlineProfile;
-          this.eventBus.emit('register_pos_profile', offlineProfile);
-        }
+        // First check opening entry
+        await this.check_opening_entry();
         
-        // Then try to sync
-        const syncResult = await api.initialSync();
-        if (!syncResult.success) {
-          this.showError('Failed to sync data: ' + syncResult.message);
+        // Then try to sync if we have a profile
+        if (this.pos_profile) {
+          const syncResult = await api.initialSync();
+          if (!syncResult.success) {
+            this.showError(syncResult.message);
+          }
         }
       } catch (error) {
         this.showError('Failed to initialize app: ' + error.message);
@@ -112,10 +110,17 @@ export default {
     },
     async searchItems(query) {
       try {
+        if (!this.pos_profile) {
+          throw new Error('POS Profile not found. Please open POS from the desk.');
+        }
+
         if (this.isOnline) {
           const result = await api.apiCall(
             'posawesome.posawesome.api.posapp.get_items',
-            { query },
+            { 
+              query,
+              pos_profile: this.pos_profile.name 
+            },
             { syncData: true }
           );
           return result.message;
@@ -129,10 +134,17 @@ export default {
     },
     async searchCustomers(query) {
       try {
+        if (!this.pos_profile) {
+          throw new Error('POS Profile not found. Please open POS from the desk.');
+        }
+
         if (this.isOnline) {
           const result = await api.apiCall(
             'posawesome.posawesome.api.posapp.get_customers',
-            { query },
+            { 
+              query,
+              pos_profile: this.pos_profile.name 
+            },
             { syncData: true }
           );
           return result.message;
