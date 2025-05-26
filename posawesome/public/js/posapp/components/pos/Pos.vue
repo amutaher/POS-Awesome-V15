@@ -171,24 +171,35 @@ export default {
         );
 
         if (result.offline) {
-          this.showInfo('Invoice saved offline. Will sync when online.');
+          this.showInfo(result.message);
+          // Store invoice ID for later reference
+          if (result.invoice_id) {
+            localStorage.setItem('last_offline_invoice_id', result.invoice_id);
+          }
+          // Emit event to update UI
+          this.eventBus.emit('invoice_saved_offline');
+          return result;
         } else {
           this.showSuccess('Invoice submitted successfully');
+          return result;
         }
-
-        return result;
       } catch (error) {
         this.showError('Failed to submit invoice: ' + error.message);
         throw error;
       }
     },
     async syncOfflineData() {
-      if (!this.isOnline) return;
+      if (!this.isOnline) {
+        this.showInfo('Cannot sync while offline');
+        return;
+      }
 
       this.syncStatus = 'syncing';
       try {
         await api.processQueue();
         this.syncStatus = 'synced';
+        // Clear last offline invoice ID
+        localStorage.removeItem('last_offline_invoice_id');
         this.showSuccess('All offline data synced successfully');
       } catch (error) {
         this.syncStatus = 'error';

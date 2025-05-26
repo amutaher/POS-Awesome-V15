@@ -1522,89 +1522,40 @@ export default {
     },
 
     // Process and save invoice (handles update or create)
-    async process_invoice() {
-      try {
-        if (!this.invoice_doc.customer) {
-          this.eventBus.emit('show_mesage', {
-            text: __('Please select a customer'),
-            color: 'error',
+    process_invoice() {
+      const doc = this.get_invoice_doc();
+      if (doc.name) {
+        try {
+          const updated_doc = this.update_invoice(doc);
+          // Update posting date after invoice update
+          if (updated_doc && updated_doc.posting_date) {
+            this.posting_date = updated_doc.posting_date;
+          }
+          return updated_doc;
+        } catch (error) {
+          console.error('Error in process_invoice:', error);
+          this.eventBus.emit('show_message', {
+            title: __(error.message || 'Error processing invoice'),
+            color: 'error'
           });
-          return;
+          return false;
         }
-        if (!this.invoice_doc.items.length) {
-          this.eventBus.emit('show_mesage', {
-            text: __('Please add items to the invoice'),
-            color: 'error',
+      } else {
+        try {
+          const updated_doc = this.update_invoice(doc);
+          // Update posting date after invoice creation
+          if (updated_doc && updated_doc.posting_date) {
+            this.posting_date = updated_doc.posting_date;
+          }
+          return updated_doc;
+        } catch (error) {
+          console.error('Error in process_invoice:', error);
+          this.eventBus.emit('show_message', {
+            title: __(error.message || 'Error processing invoice'),
+            color: 'error'
           });
-          return;
+          return false;
         }
-
-        // Check if we're offline
-        if (!navigator.onLine) {
-          // Save invoice to IndexedDB for later sync
-          const offlineInvoice = {
-            doctype: 'POS Invoice',
-            customer: this.invoice_doc.customer,
-            items: this.invoice_doc.items,
-            payments: this.invoice_doc.payments,
-            taxes: this.invoice_doc.taxes,
-            pos_profile: this.pos_profile.name,
-            offline: true,
-            posting_date: frappe.datetime.now_date(),
-            posting_time: frappe.datetime.now_time(),
-            company: this.pos_profile.company,
-            total: this.invoice_doc.total,
-            grand_total: this.invoice_doc.grand_total,
-            status: 'Draft'
-          };
-
-          await api.apiCall(
-            'posawesome.posawesome.api.posapp.submit_invoice',
-            { invoice: offlineInvoice },
-            { isInvoice: true, offlineSupport: true }
-          );
-
-          this.eventBus.emit('show_mesage', {
-            text: __('Invoice saved offline. Will sync when online.'),
-            color: 'warning',
-          });
-
-          // Reset the form
-          this.reset_invoice();
-          return;
-        }
-
-        // If online, proceed with normal flow
-        await this.update_invoice();
-      } catch (error) {
-        console.error('Failed to process invoice:', error);
-        this.eventBus.emit('show_mesage', {
-          text: __('Failed to process invoice: ') + error.message,
-          color: 'error',
-        });
-      }
-    },
-
-    async update_invoice() {
-      try {
-        const result = await frappe.call({
-          method: 'posawesome.posawesome.api.posapp.submit_invoice',
-          args: {
-            invoice: this.invoice_doc,
-          },
-        });
-
-        if (result.message) {
-          this.eventBus.emit('show_mesage', {
-            text: __('Invoice submitted successfully'),
-            color: 'success',
-          });
-
-          this.reset_invoice();
-        }
-      } catch (error) {
-        console.error('Failed to update invoice:', error);
-        throw error;
       }
     },
 
@@ -1623,28 +1574,121 @@ export default {
     // Show payment dialog after validation and processing
     async show_payment() {
       try {
-        if (!this.invoice_doc.customer) {
-          this.eventBus.emit('show_mesage', {
-            text: __('Please select a customer'),
-            color: 'error',
-          });
-          return;
-        }
-        if (!this.invoice_doc.items.length) {
-          this.eventBus.emit('show_mesage', {
-            text: __('Please add items to the invoice'),
-            color: 'error',
+        console.log('Starting show_payment process');
+        console.log('Invoice state before payment:', {
+          invoiceType: this.invoiceType,
+          is_return: this.invoice_doc ? this.invoice_doc.is_return : false,
+          items_count: this.items.length,
+          customer: this.customer
+        });
+
+        if (!this.customer) {
+          console.log('Customer validation failed');
+          this.eventBus.emit("show_message", {
+            title: __(`Select a customer`),
+            color: "error",
           });
           return;
         }
 
-        await this.process_invoice();
-        this.eventBus.emit('show_payment', 'true');
+        if (!this.items.length) {
+          console.log('Items validation failed - no items');
+          this.eventBus.emit("show_message", {
+            title: __(`Select items to sell`),
+            color: "error",
+          });
+          return;
+        }
+
+        console.log('Basic validations passed, proceeding to main validation');
+        const isValid = this.validate();
+        console.log('Main validation result:', isValid);
+
+        if (!isValid) {
+          console.log('Main validation failed');
+          return;
+        }
+
+        let invoice_doc;
+        if (this.invoice_doc.doctype == "Sales Order") {
+          console.log('Processing Sales Order payment');
+          invoice_doc = await this.process_invoice_from_order();
+        } else {
+          console.log('Processing regular invoice');
+          invoice_doc = this.process_invoice();
+        }
+
+        if (!invoice_doc) {
+          console.log('Failed to process invoice');
+          return;
+        }
+
+        // Update invoice_doc with current currency info
+        invoice_doc.currency = this.selected_currency || this.pos_profile.currency;
+        invoice_doc.conversion_rate = this.exchange_rate || 1;
+        
+        // Update totals in invoice_doc to match current calculations
+        invoice_doc.total = this.Total;
+        invoice_doc.grand_total = this.subtotal;
+        
+        // Apply rounding to get rounded total
+        invoice_doc.rounded_total = this.roundAmount(this.subtotal);
+        invoice_doc.base_total = this.Total * (1 / this.exchange_rate || 1);
+        invoice_doc.base_grand_total = this.subtotal * (1 / this.exchange_rate || 1);
+        invoice_doc.base_rounded_total = this.roundAmount(invoice_doc.base_grand_total);
+        
+        // Check if this is a return invoice
+        if (this.invoiceType === 'Return' || invoice_doc.is_return) {
+          console.log('Preparing RETURN invoice for payment with:', {
+            is_return: invoice_doc.is_return,
+            invoiceType: this.invoiceType,
+            return_against: invoice_doc.return_against,
+            items: invoice_doc.items.length,
+            grand_total: invoice_doc.grand_total
+          });
+          
+          // For return invoices, explicitly ensure all amounts are negative
+          invoice_doc.is_return = 1;
+          if (invoice_doc.grand_total > 0) invoice_doc.grand_total = -Math.abs(invoice_doc.grand_total);
+          if (invoice_doc.rounded_total > 0) invoice_doc.rounded_total = -Math.abs(invoice_doc.rounded_total);
+          if (invoice_doc.total > 0) invoice_doc.total = -Math.abs(invoice_doc.total);
+          if (invoice_doc.base_grand_total > 0) invoice_doc.base_grand_total = -Math.abs(invoice_doc.base_grand_total);
+          if (invoice_doc.base_rounded_total > 0) invoice_doc.base_rounded_total = -Math.abs(invoice_doc.base_rounded_total);
+          if (invoice_doc.base_total > 0) invoice_doc.base_total = -Math.abs(invoice_doc.base_total);
+          
+          // Ensure all items have negative quantity and amount
+          if (invoice_doc.items && invoice_doc.items.length) {
+            invoice_doc.items.forEach(item => {
+              if (item.qty > 0) item.qty = -Math.abs(item.qty);
+              if (item.stock_qty > 0) item.stock_qty = -Math.abs(item.stock_qty);
+              if (item.amount > 0) item.amount = -Math.abs(item.amount);
+            });
+          }
+        }
+        
+        // Get payments with correct sign (positive/negative)
+        invoice_doc.payments = this.get_payments();
+        console.log('Final payment data:', invoice_doc.payments);
+
+        // Double-check return invoice payments are negative
+        if ((this.invoiceType === 'Return' || invoice_doc.is_return) && invoice_doc.payments.length) {
+          invoice_doc.payments.forEach(payment => {
+            if (payment.amount > 0) payment.amount = -Math.abs(payment.amount);
+            if (payment.base_amount > 0) payment.base_amount = -Math.abs(payment.base_amount);
+          });
+          console.log('Ensured negative payment amounts for return:', invoice_doc.payments);
+        }
+
+        console.log('Showing payment dialog with currency:', invoice_doc.currency);
+        this.eventBus.emit("show_payment", "true");
+        this.eventBus.emit("send_invoice_doc_payment", invoice_doc);
+
       } catch (error) {
-        console.error('Failed to show payment:', error);
-        this.eventBus.emit('show_mesage', {
-          text: __('Failed to process payment: ') + error.message,
-          color: 'error',
+        console.error('Error in show_payment:', error);
+        this.eventBus.emit("show_message", {
+          title: __("Error processing payment"),
+          color: "error",
+          message: error.message
         });
       }
     },

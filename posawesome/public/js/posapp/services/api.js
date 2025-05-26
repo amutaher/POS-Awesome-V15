@@ -74,14 +74,25 @@ export async function apiCall(method, args = {}, options = {}) {
       }
       throw error;
     }
-  } else if (offlineSupport) {
-    // If offline and operation supports offline mode
+  } else if (offlineSupport || isInvoice) { // Allow offline mode for invoices
     if (isInvoice) {
-      await InvoicesDB.addInvoice({
+      // Store invoice in IndexedDB
+      const invoice = {
         method,
-        args
-      });
-      return { offline: true, queued: true, message: 'Transaction saved offline' };
+        args,
+        createdAt: new Date().toISOString(),
+        status: 'pending'
+      };
+      
+      const id = await InvoicesDB.addInvoice(invoice);
+      console.log('Invoice saved offline with ID:', id);
+      
+      return { 
+        offline: true, 
+        queued: true, 
+        message: 'Transaction saved offline. Will sync when online.',
+        invoice_id: id 
+      };
     }
     return { offline: true, message: 'App is offline' };
   } else {
@@ -112,12 +123,17 @@ async function syncToIndexedDB(method, data) {
 
 // Process offline queue
 export async function processQueue() {
-  if (!isOnline) return;
+  if (!isOnline) {
+    console.log('Still offline, cannot process queue');
+    return;
+  }
   
+  console.log('Processing offline queue...');
   const pendingInvoices = await InvoicesDB.getPendingInvoices();
   
   for (const invoice of pendingInvoices) {
     try {
+      console.log('Processing invoice:', invoice);
       const response = await frappe.call({
         method: invoice.method,
         args: invoice.args
@@ -130,6 +146,7 @@ export async function processQueue() {
         indicator: 'green'
       });
     } catch (error) {
+      console.error('Failed to sync invoice:', error);
       await InvoicesDB.updateInvoiceStatus(invoice.id, 'error', error.message);
       
       frappe.show_alert({
