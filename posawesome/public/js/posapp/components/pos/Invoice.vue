@@ -495,14 +495,6 @@ export default {
       selected_currency: "", // Currently selected currency
       exchange_rate: 1, // Current exchange rate
       available_currencies: [], // List of available currencies
-      pos_invoice: {
-        items: [],
-        customer: 'Walk-In',
-        items_count: 0
-      },
-      selected_payment: null,
-      isOnline: navigator.onLine,
-      updateInterval: null
     };
   },
 
@@ -4080,81 +4072,227 @@ export default {
       this.calc_stock_qty(item, item.qty);
       this.$forceUpdate();
     },
-
-    async update_invoice() {
-      if (!this.isOnline) {
-        console.log('Skipping invoice update in offline mode');
-        return;
-      }
-      try {
-        const result = await frappe.call({
-          method: 'posawesome.posawesome.api.posapp.update_invoice',
-          args: {
-            data: this.pos_invoice,
-          },
-        });
-        return result;
-      } catch (error) {
-        console.error('Failed to update invoice:', error);
-        return null;
-      }
-    },
-
-    async update_items_details() {
-      if (!this.isOnline) {
-        console.log('Skipping items update in offline mode');
-        return;
-      }
-      try {
-        await this.update_cur_items_details();
-      } catch (error) {
-        console.error('Failed to update items:', error);
-      }
-    },
-
-    setupNetworkListeners() {
-      window.addEventListener('online', () => {
-        console.log('Browser went online');
-        this.isOnline = true;
-        this.startUpdateInterval();
-      });
-      
-      window.addEventListener('offline', () => {
-        console.log('Browser went offline');
-        this.isOnline = false;
-        this.stopUpdateInterval();
-      });
-    },
-
-    startUpdateInterval() {
-      if (this.updateInterval) {
-        clearInterval(this.updateInterval);
-      }
-      if (this.isOnline) {
-        this.updateInterval = setInterval(() => {
-          this.update_items_details();
-        }, 60000); // Update every minute when online
-      }
-    },
-
-    stopUpdateInterval() {
-      if (this.updateInterval) {
-        clearInterval(this.updateInterval);
-        this.updateInterval = null;
-      }
-    },
   },
 
   mounted() {
-    this.setupNetworkListeners();
-    this.startUpdateInterval();
-  },
+    // Register event listeners for POS profile, items, customer, offers, etc.
+    this.eventBus.on("register_pos_profile", (data) => {
+      this.pos_profile = data.pos_profile;
+      this.customer = data.pos_profile.customer;
+      this.pos_opening_shift = data.pos_opening_shift;
+      this.stock_settings = data.stock_settings;
+      // Increase precision for better handling of small amounts
+      this.float_precision = 6;  // Changed from 2 to 6
+      this.currency_precision = 6;  // Changed from 2 to 6
+      this.invoiceType = this.pos_profile.posa_default_sales_order
+        ? "Order"
+        : "Invoice";
 
+      // Add this block to handle currency initialization
+      if (this.pos_profile.posa_allow_multi_currency) {
+        this.fetch_available_currencies().then(() => {
+          // Set default currency after currencies are loaded
+          this.selected_currency = this.pos_profile.currency;
+          this.exchange_rate = 1;
+        }).catch(error => {
+          console.error("Error initializing currencies:", error);
+          this.eventBus.emit("show_message", {
+            title: __("Error loading currencies"),
+            color: "error"
+          });
+        });
+      }
+    });
+    this.eventBus.on("add_item", (item) => {
+      this.add_item(item);
+    });
+    this.eventBus.on("update_customer", (customer) => {
+      this.customer = customer;
+    });
+    this.eventBus.on("fetch_customer_details", () => {
+      this.fetch_customer_details();
+    });
+    this.eventBus.on("clear_invoice", () => {
+      this.clear_invoice();
+    });
+    this.eventBus.on("load_invoice", (data) => {
+      this.load_invoice(data);
+    });
+    this.eventBus.on("load_order", (data) => {
+      this.new_order(data);
+      // this.eventBus.emit("set_pos_coupons", data.posa_coupons);
+    });
+    this.eventBus.on("set_offers", (data) => {
+      this.posOffers = data;
+    });
+    this.eventBus.on("update_invoice_offers", (data) => {
+      this.updateInvoiceOffers(data);
+    });
+    this.eventBus.on("update_invoice_coupons", (data) => {
+      this.posa_coupons = data;
+      this.handelOffers();
+    });
+    this.eventBus.on("set_all_items", (data) => {
+      this.allItems = data;
+      this.items.forEach((item) => {
+        this.update_item_detail(item);
+      });
+    });
+    this.eventBus.on("load_return_invoice", (data) => {
+      // Handle loading of return invoice and set all related fields
+      console.log("Invoice component received load_return_invoice event with data:", data);
+      this.load_invoice(data.invoice_doc);
+      // Explicitly mark as return invoice
+      this.invoiceType = "Return";
+      this.invoiceTypes = ["Return"];
+      this.invoice_doc.is_return = 1;
+      // Ensure negative values for returns
+      if (this.items && this.items.length) {
+        this.items.forEach(item => {
+          // Ensure item quantities are negative
+          if (item.qty > 0) item.qty = -Math.abs(item.qty);
+          if (item.stock_qty > 0) item.stock_qty = -Math.abs(item.stock_qty);
+        });
+      }
+      if (data.return_doc) {
+        console.log("Return against existing invoice:", data.return_doc.name);
+        // Ensure negative discount amounts
+        this.discount_amount = data.return_doc.discount_amount > 0 ? 
+          -Math.abs(data.return_doc.discount_amount) : 
+          data.return_doc.discount_amount;
+        this.additional_discount_percentage = data.return_doc.additional_discount_percentage > 0 ?
+          -Math.abs(data.return_doc.additional_discount_percentage) :
+          data.return_doc.additional_discount_percentage;
+        this.return_doc = data.return_doc;
+        // Set return_against reference
+        this.invoice_doc.return_against = data.return_doc.name;
+      } else {
+        console.log("Return without invoice reference");
+        // For return without invoice, reset discount values
+        this.discount_amount = 0;
+        this.additional_discount_percentage = 0;
+      }
+      console.log("Invoice state after loading return:", {
+        invoiceType: this.invoiceType,
+        is_return: this.invoice_doc.is_return,
+        items: this.items.length,
+        customer: this.customer
+      });
+    });
+    this.eventBus.on("set_new_line", (data) => {
+      this.new_line = data;
+    });
+    if (this.pos_profile.posa_allow_multi_currency) {
+      this.fetch_available_currencies();
+    }
+    // Listen for reset_posting_date to reset posting date after invoice submission
+    this.eventBus.on("reset_posting_date", () => {
+      this.posting_date = frappe.datetime.nowdate();
+    });
+  },
+  // Cleanup event listeners before component is destroyed
   beforeUnmount() {
-    this.stopUpdateInterval();
-    window.removeEventListener('online', this.setupNetworkListeners);
-    window.removeEventListener('offline', this.setupNetworkListeners);
-  }
+    // Existing cleanup
+    this.eventBus.off("register_pos_profile");
+    this.eventBus.off("add_item");
+    this.eventBus.off("update_customer");
+    this.eventBus.off("fetch_customer_details");
+    this.eventBus.off("clear_invoice");
+    // Cleanup reset_posting_date listener
+    this.eventBus.off("reset_posting_date");
+  },
+  // Register global keyboard shortcuts when component is created
+  created() {
+    document.addEventListener("keydown", this.shortOpenPayment.bind(this));
+    document.addEventListener("keydown", this.shortDeleteFirstItem.bind(this));
+    document.addEventListener("keydown", this.shortOpenFirstItem.bind(this));
+    document.addEventListener("keydown", this.shortSelectDiscount.bind(this));
+  },
+  // Remove global keyboard shortcuts when component is unmounted
+  unmounted() {
+    document.removeEventListener("keydown", this.shortOpenPayment);
+    document.removeEventListener("keydown", this.shortDeleteFirstItem);
+    document.removeEventListener("keydown", this.shortOpenFirstItem);
+    document.removeEventListener("keydown", this.shortSelectDiscount);
+  },
+  // Vue watchers for reactive data changes
+  watch: {
+    // Watch for customer change and update related data
+    customer() {
+      this.close_payments();
+      this.eventBus.emit("set_customer", this.customer);
+      this.fetch_customer_details();
+      this.fetch_customer_balance();
+      this.set_delivery_charges();
+    },
+    // Watch for customer_info change and emit to edit form
+    customer_info() {
+      this.eventBus.emit("set_customer_info_to_edit", this.customer_info);
+    },
+    // Watch for expanded row change and update item detail
+    expanded(data_value) {
+      if (data_value.length > 0) {
+        this.update_item_detail(data_value[0]);
+      }
+    },
+    // Watch for discount offer name change and emit
+    discount_percentage_offer_name() {
+      this.eventBus.emit("update_discount_percentage_offer_name", {
+        value: this.discount_percentage_offer_name,
+      });
+    },
+    // Watch for items array changes (deep) and re-handle offers
+    items: {
+      deep: true,
+      handler(items) {
+        this.handelOffers();
+        this.$forceUpdate();
+      },
+    },
+    // Watch for invoice type change and emit
+    invoiceType() {
+      this.eventBus.emit("update_invoice_type", this.invoiceType);
+    },
+    // Watch for additional discount and update percentage accordingly
+    additional_discount() {
+      if (!this.additional_discount || this.additional_discount == 0) {
+        this.additional_discount_percentage = 0;
+      } else if (this.pos_profile.posa_use_percentage_discount) {
+        // Prevent division by zero which causes NaN
+        if (this.Total && this.Total !== 0) {
+          this.additional_discount_percentage =
+            (this.additional_discount / this.Total) * 100;
+        } else {
+          this.additional_discount_percentage = 0;
+        }
+      } else {
+        this.additional_discount_percentage = 0;
+      }
+    },
+    // Watch for posting date changes and ensure correct format
+    posting_date: {
+      handler(newVal) {
+        if (!newVal) return;
+        // Make sure the date is in YYYY-MM-DD format
+        if (typeof newVal === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(newVal)) {
+          return; // Already in correct format
+        }
+
+        let dateStr;
+        if (newVal instanceof Date) {
+          const year = newVal.getFullYear();
+          const month = String(newVal.getMonth() + 1).padStart(2, '0');
+          const day = String(newVal.getDate()).padStart(2, '0');
+          dateStr = `${year}-${month}-${day}`;
+        } else {
+          dateStr = frappe.datetime.nowdate();
+        }
+
+        this.posting_date = dateStr;
+      },
+      immediate: true
+    },
+  },
 };
 </script>
 

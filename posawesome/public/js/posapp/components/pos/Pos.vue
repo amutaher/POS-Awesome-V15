@@ -61,7 +61,7 @@ export default {
       isOnline: navigator.onLine,
       offlineMode: false,
       syncStatus: 'synced',
-      updateInterval: null,
+      updateInterval: null
     };
   },
 
@@ -88,8 +88,8 @@ export default {
         // First check opening entry
         await this.check_opening_entry();
         
-        // Then try to sync if we have a profile
-        if (this.pos_profile) {
+        // Then try to sync if we have a profile and we're online
+        if (this.pos_profile && this.isOnline) {
           const syncResult = await api.initialSync();
           if (!syncResult.success) {
             this.showError(syncResult.message);
@@ -99,20 +99,27 @@ export default {
         this.showError('Failed to initialize app: ' + error.message);
       }
     },
+
     setupNetworkListeners() {
+      this.isOnline = navigator.onLine;
       window.addEventListener('online', () => {
-        console.log('Browser went online');
         this.isOnline = true;
+        this.offlineMode = false;
         this.syncOfflineData();
-        this.startUpdateInterval();
+        this.showSuccess('You are back online');
       });
-      
       window.addEventListener('offline', () => {
-        console.log('Browser went offline');
         this.isOnline = false;
-        this.stopUpdateInterval();
+        this.offlineMode = true;
+        this.showInfo('You are offline. Some features may be limited');
+        // Clear any existing update interval
+        if (this.updateInterval) {
+          clearInterval(this.updateInterval);
+          this.updateInterval = null;
+        }
       });
     },
+
     async searchItems(query) {
       try {
         if (!this.pos_profile) {
@@ -218,8 +225,7 @@ export default {
             ...invoice,
             offline: true,
             created_at: new Date().toISOString(),
-            status: 'pending',
-            pos_profile: this.pos_profile ? this.pos_profile.name : null
+            status: 'pending'
           };
           
           // Store in localStorage
@@ -230,9 +236,6 @@ export default {
           // Emit events
           this.eventBus.emit('invoice_saved_offline', offlineInvoice);
           this.eventBus.emit('reset_current_invoice');
-          
-          // Clear current invoice state
-          this.clear_current_invoice();
           
           return {
             success: true,
@@ -249,6 +252,10 @@ export default {
         };
       } catch (error) {
         console.error('Process invoice error:', error);
+        if (!this.isOnline) {
+          // If offline, still try to save locally
+          return this.processInvoice(invoice, payments);
+        }
         return {
           success: false,
           message: error.message
@@ -321,7 +328,15 @@ export default {
         }
       } catch (error) {
         console.error('Show payment error:', error);
-        this.showError('Failed to process payment: ' + error.message);
+        if (!this.isOnline) {
+          // If offline, try to save as offline invoice
+          const payments = this.generate_offline_payments(invoice_data);
+          await this.processInvoice(invoice_data, payments);
+          this.showInfo('Invoice saved offline');
+          this.clear_current_invoice();
+        } else {
+          this.showError('Failed to process payment: ' + error.message);
+        }
       }
     },
     async syncOfflineData() {
@@ -462,9 +477,7 @@ export default {
     clear_current_invoice() {
       // Reset invoice related data
       this.eventBus.emit('reset_current_invoice');
-      this.payment = false;
-      this.offers = false;
-      this.coupons = false;
+      // Any other cleanup needed
     },
     // Override the update_items_details method to handle offline mode
     async update_items_details() {
@@ -472,35 +485,25 @@ export default {
         console.log('Skipping items update in offline mode');
         return;
       }
-      try {
-        await this.update_cur_items_details();
-      } catch (error) {
-        console.error('Failed to update items:', error);
-      }
-    },
-    startUpdateInterval() {
-      if (this.updateInterval) {
-        clearInterval(this.updateInterval);
-      }
-      if (this.isOnline) {
-        this.updateInterval = setInterval(() => {
-          this.update_items_details();
-        }, 60000); // Update every minute when online
-      }
-    },
-    stopUpdateInterval() {
-      if (this.updateInterval) {
-        clearInterval(this.updateInterval);
-        this.updateInterval = null;
-      }
+      // Original update logic for online mode
+      await this.update_cur_items_details();
     },
   },
 
   mounted: function () {
     this.$nextTick(function () {
       this.setupNetworkListeners();
-      this.startUpdateInterval();
       this.initializeApp();
+      
+      // Only set up interval if online
+      if (this.isOnline) {
+        this.updateInterval = setInterval(() => {
+          if (this.isOnline) {
+            this.update_items_details();
+          }
+        }, 60000); // Update every minute when online
+      }
+      
       this.check_opening_entry();
       this.get_pos_setting();
       this.eventBus.on('close_opening_dialog', () => {
@@ -544,7 +547,13 @@ export default {
     this.eventBus.off('show_coupons');
     this.eventBus.off('open_closing_dialog');
     this.eventBus.off('submit_closing_pos');
-    this.stopUpdateInterval();
+    
+    // Clear interval on unmount
+    if (this.updateInterval) {
+      clearInterval(this.updateInterval);
+    }
+    
+    // Remove network listeners
     window.removeEventListener('online', this.setupNetworkListeners);
     window.removeEventListener('offline', this.setupNetworkListeners);
   },
