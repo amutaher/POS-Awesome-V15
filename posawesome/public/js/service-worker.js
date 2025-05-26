@@ -11,15 +11,16 @@ workbox.setConfig({
 
 // Cache the app shell
 workbox.precaching.precacheAndRoute([
-  { url: '/assets/posawesome/js/posawesome.bundle.js', revision: '1.0.0' },
-  { url: '/assets/posawesome/css/posawesome.css', revision: '1.0.0' },
-  { url: '/assets/posawesome/js/manifest.json', revision: '1.0.0' },
-  // Add other important assets
+  { url: '/app/posapp/', revision: '1.0.0' },
+  { url: '/app/posapp/manifest.json', revision: '1.0.0' },
+  { url: '/assets/posawesome.bundle.js', revision: '1.0.0' },
+  { url: '/assets/posawesome.css', revision: '1.0.0' },
+  { url: '/assets/posawesome/js/posapp/components/pos/', revision: '1.0.0' }
 ]);
 
 // Cache API responses
 workbox.routing.registerRoute(
-  new RegExp('/api/method/posawesome.posawesome.api.posapp.get_items'),
+  new RegExp('/api/method/posawesome.posawesome.api.posapp.*'),
   new workbox.strategies.NetworkFirst({
     cacheName: 'api-cache',
     plugins: [
@@ -31,11 +32,11 @@ workbox.routing.registerRoute(
   })
 );
 
-// Cache customer data
+// Cache all POS app routes
 workbox.routing.registerRoute(
-  new RegExp('/api/method/posawesome.posawesome.api.posapp.get_customer_names'),
+  new RegExp('/app/posapp/.*'),
   new workbox.strategies.NetworkFirst({
-    cacheName: 'customer-cache',
+    cacheName: 'pos-routes-cache',
     plugins: [
       new workbox.expiration.ExpirationPlugin({
         maxEntries: 50,
@@ -45,14 +46,28 @@ workbox.routing.registerRoute(
   })
 );
 
-// Cache for other static resources (images, etc.)
+// Cache static assets
 workbox.routing.registerRoute(
-  new RegExp('/assets/'),
+  new RegExp('/assets/.*'),
   new workbox.strategies.CacheFirst({
     cacheName: 'assets-cache',
     plugins: [
       new workbox.expiration.ExpirationPlugin({
         maxEntries: 60,
+        maxAgeSeconds: 30 * 24 * 60 * 60 // 30 days
+      })
+    ]
+  })
+);
+
+// Cache fonts
+workbox.routing.registerRoute(
+  new RegExp('https://fonts.(?:googleapis|gstatic).com/(.*)'),
+  new workbox.strategies.CacheFirst({
+    cacheName: 'google-fonts',
+    plugins: [
+      new workbox.expiration.ExpirationPlugin({
+        maxEntries: 30,
         maxAgeSeconds: 30 * 24 * 60 * 60 // 30 days
       })
     ]
@@ -76,7 +91,13 @@ workbox.routing.registerRoute(
 // Handle offline fallback
 workbox.routing.setDefaultHandler(
   new workbox.strategies.NetworkFirst({
-    cacheName: 'default-cache'
+    cacheName: 'default-cache',
+    plugins: [
+      new workbox.expiration.ExpirationPlugin({
+        maxEntries: 100,
+        maxAgeSeconds: 24 * 60 * 60 // 24 hours
+      })
+    ]
   })
 );
 

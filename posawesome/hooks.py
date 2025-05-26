@@ -282,5 +282,5 @@ fixtures = [
 
 # Website context for PWA
 website_context = {
-    "manifest_json": "/assets/posawesome/js/manifest.json"
+    "manifest_json": "/app/posapp/manifest.json"
 }
