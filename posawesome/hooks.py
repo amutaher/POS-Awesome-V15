@@ -16,16 +16,14 @@ app_license = "GPLv3"
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/posawesome/css/posawesome.css"
-# app_include_js = "/assets/posawesome/js/posawesome.js"
 app_include_js = [
     "posawesome.bundle.js",
 ]
 
 # include js, css files in header of web template
 # web_include_css = "/assets/posawesome/css/posawesome.css"
-# web_include_js = "/assets/posawesome/js/posawesome.js"
 web_include_js = [
-    "/assets/js/pwa-register.js"
+    "/assets/posawesome/js/pwa-register.js"
 ]
 
 # include js, css files in header of web form

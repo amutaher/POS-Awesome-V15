@@ -6,13 +6,14 @@ const CACHE_NAME = 'posawesome-cache-v1';
 
 // Configure workbox
 workbox.setConfig({
-  debug: false
+  debug: true // Enable debug mode to see what's happening
 });
 
 // Cache the app shell
 workbox.precaching.precacheAndRoute([
-  { url: '/assets/js/posawesome.bundle.js', revision: '1.0.0' },
-  { url: '/assets/css/posawesome.css', revision: '1.0.0' },
+  { url: '/assets/posawesome/js/posawesome.bundle.js', revision: '1.0.0' },
+  { url: '/assets/posawesome/css/posawesome.css', revision: '1.0.0' },
+  { url: '/assets/posawesome/js/manifest.json', revision: '1.0.0' },
   // Add other important assets
 ]);
 
