@@ -1596,7 +1596,7 @@ export default {
       try {
         console.log('Starting show_payment process');
         
-        // Get current invoice data instead of using event
+        // Get current invoice data
         const invoice_data = {
           items_count: this.items.length,
           customer: this.customer,
@@ -1646,7 +1646,7 @@ export default {
           console.log('Showing payment dialog with currency:', invoice_data.currency);
           
           if (!navigator.onLine) {
-            // For offline mode, set default cash payment
+            // For offline mode, prepare offline payment data
             const payments = [{
               mode_of_payment: 'Cash',
               amount: invoice_data.grand_total,
@@ -1654,18 +1654,23 @@ export default {
             }];
             invoice_data.payments = payments;
             
-            // Skip API calls in offline mode
-            this.eventBus.emit("show_payment", {
+            // Emit event with offline flag
+            this.eventBus.emit('show_payment', {
               offline: true,
               invoice_data: invoice_data
             });
-            
-            this.showInfo('Invoice will be processed when online');
           } else {
-            // For online mode, send current invoice doc
-            this.eventBus.emit("show_payment", {
+            // For online mode, prepare invoice doc
+            const invoice_doc = await this.process_invoice();
+            if (!invoice_doc) {
+              this.showError('Failed to process invoice');
+              return;
+            }
+            
+            // Emit event with online data
+            this.eventBus.emit('show_payment', {
               offline: false,
-              invoice_doc: this.invoice_doc
+              invoice_doc: invoice_doc
             });
           }
         }
@@ -4192,6 +4197,18 @@ export default {
     this.eventBus.on("reset_posting_date", () => {
       this.posting_date = frappe.datetime.nowdate();
     });
+
+    // Initialize update interval with offline check
+    this.update_interval = setInterval(() => {
+      if (navigator.onLine) {
+        this.update_cur_items_details();
+      }
+    }, 60000);
+
+    // Listen for online/offline events
+    window.addEventListener('online', () => {
+      this.update_cur_items_details();
+    });
   },
   // Cleanup event listeners before component is destroyed
   beforeUnmount() {
@@ -4203,6 +4220,10 @@ export default {
     this.eventBus.off("clear_invoice");
     // Cleanup reset_posting_date listener
     this.eventBus.off("reset_posting_date");
+    if (this.update_interval) {
+      clearInterval(this.update_interval);
+    }
+    window.removeEventListener('online', this.update_cur_items_details);
   },
   // Register global keyboard shortcuts when component is created
   created() {
