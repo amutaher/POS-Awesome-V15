@@ -160,7 +160,7 @@ export async function initialSync() {
       { syncData: true }
     );
     
-    // Note: get_customers API is not available, using Frappe API instead
+    // Get customers using Frappe API
     const customers = await frappe.db.get_list('Customer', {
       fields: ['name', 'customer_name'],
       limit: 0
@@ -169,25 +169,24 @@ export async function initialSync() {
       await CustomersDB.saveCustomers(customers);
     }
     
-    // Note: These APIs might not be available in current version
-    try {
-      // Try to sync price lists if API exists
-      const priceLists = await apiCall('posawesome.posawesome.api.posapp.get_price_lists', 
-        { pos_profile }, 
-        { syncData: true }
-      );
-    } catch (e) {
-      console.warn('Price lists sync failed:', e);
+    // Get price lists using Frappe API
+    const priceLists = await frappe.db.get_list('Price List', {
+      fields: ['name', 'currency'],
+      filters: [['enabled', '=', 1]],
+      limit: 0
+    });
+    if (priceLists) {
+      await PriceListsDB.savePriceLists(priceLists);
     }
     
-    try {
-      // Try to sync tax rules if API exists
-      const taxRules = await apiCall('posawesome.posawesome.api.posapp.get_tax_rules', 
-        { pos_profile }, 
-        { syncData: true }
-      );
-    } catch (e) {
-      console.warn('Tax rules sync failed:', e);
+    // Get tax rules using Frappe API
+    const taxTemplates = await frappe.db.get_list('Sales Taxes and Charges Template', {
+      fields: ['name', 'tax_category'],
+      filters: [['disabled', '=', 0]],
+      limit: 0
+    });
+    if (taxTemplates) {
+      await TaxRulesDB.saveTaxRules(taxTemplates);
     }
 
     return {
