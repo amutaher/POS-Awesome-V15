@@ -35,10 +35,16 @@ export async function apiCall(method, args = {}, options = {}) {
   if (!args.pos_profile && method.includes('get_items')) {
     const currentProfile = await PosProfileDB.getCurrentProfile();
     if (currentProfile) {
-      args.pos_profile = currentProfile.name;
+      // Stringify the pos_profile object
+      args.pos_profile = JSON.stringify(currentProfile);
     } else {
       throw new Error('POS Profile not found. Please open POS from the desk.');
     }
+  }
+  
+  // If pos_profile exists in args but isn't stringified, stringify it
+  if (args.pos_profile && typeof args.pos_profile === 'object') {
+    args.pos_profile = JSON.stringify(args.pos_profile);
   }
   
   if (isOnline) {
@@ -145,7 +151,8 @@ export async function initialSync() {
       throw new Error('POS Profile not found. Please open POS from the desk.');
     }
 
-    const pos_profile = currentProfile.name;
+    // Stringify the pos_profile
+    const pos_profile = JSON.stringify(currentProfile);
 
     // Sync items with POS profile
     const items = await apiCall('posawesome.posawesome.api.posapp.get_items', 

@@ -119,7 +119,7 @@ export default {
             'posawesome.posawesome.api.posapp.get_items',
             { 
               query,
-              pos_profile: this.pos_profile.name 
+              pos_profile: JSON.stringify(this.pos_profile)
             },
             { syncData: true }
           );
@@ -143,7 +143,7 @@ export default {
             'posawesome.posawesome.api.posapp.get_customers',
             { 
               query,
-              pos_profile: this.pos_profile.name 
+              pos_profile: JSON.stringify(this.pos_profile)
             },
             { syncData: true }
           );
