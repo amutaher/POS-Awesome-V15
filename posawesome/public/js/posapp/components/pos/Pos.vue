@@ -30,6 +30,8 @@
 </template>
 
 <script>
+import api from '../../services/api';
+import { ItemsDB, CustomersDB } from '../../services/db';
 
 import ItemsSelector from './ItemsSelector.vue';
 import Invoice from './Invoice.vue';
@@ -46,6 +48,7 @@ import Returns from './Returns.vue';
 import MpesaPayments from './Mpesa-Payments.vue';
 
 export default {
+  name: 'Pos',
   data: function () {
     return {
       dialog: false,
@@ -54,6 +57,9 @@ export default {
       payment: false,
       offers: false,
       coupons: false,
+      isOnline: true,
+      offlineMode: false,
+      syncStatus: 'synced',
     };
   },
 
@@ -75,6 +81,111 @@ export default {
   },
 
   methods: {
+    async initializeApp() {
+      try {
+        const syncResult = await api.initialSync();
+        if (!syncResult.success) {
+          this.showError('Failed to sync data: ' + syncResult.message);
+        }
+      } catch (error) {
+        this.showError('Failed to initialize app: ' + error.message);
+      }
+    },
+    setupNetworkListeners() {
+      this.isOnline = navigator.onLine;
+      window.addEventListener('online', () => {
+        this.isOnline = true;
+        this.syncOfflineData();
+      });
+      window.addEventListener('offline', () => {
+        this.isOnline = false;
+      });
+    },
+    async searchItems(query) {
+      try {
+        if (this.isOnline) {
+          const result = await api.apiCall(
+            'posawesome.posawesome.api.posapp.get_items',
+            { query },
+            { syncData: true }
+          );
+          return result.message;
+        } else {
+          return await ItemsDB.searchItems(query);
+        }
+      } catch (error) {
+        this.showError('Failed to search items: ' + error.message);
+        return [];
+      }
+    },
+    async searchCustomers(query) {
+      try {
+        if (this.isOnline) {
+          const result = await api.apiCall(
+            'posawesome.posawesome.api.posapp.get_customers',
+            { query },
+            { syncData: true }
+          );
+          return result.message;
+        } else {
+          return await CustomersDB.searchCustomers(query);
+        }
+      } catch (error) {
+        this.showError('Failed to search customers: ' + error.message);
+        return [];
+      }
+    },
+    async submitInvoice(invoice) {
+      try {
+        const result = await api.apiCall(
+          'posawesome.posawesome.api.posapp.submit_invoice',
+          { invoice },
+          { isInvoice: true, offlineSupport: true }
+        );
+
+        if (result.offline) {
+          this.showInfo('Invoice saved offline. Will sync when online.');
+        } else {
+          this.showSuccess('Invoice submitted successfully');
+        }
+
+        return result;
+      } catch (error) {
+        this.showError('Failed to submit invoice: ' + error.message);
+        throw error;
+      }
+    },
+    async syncOfflineData() {
+      if (!this.isOnline) return;
+
+      this.syncStatus = 'syncing';
+      try {
+        await api.processQueue();
+        this.syncStatus = 'synced';
+        this.showSuccess('All offline data synced successfully');
+      } catch (error) {
+        this.syncStatus = 'error';
+        this.showError('Failed to sync offline data: ' + error.message);
+      }
+    },
+    showSuccess(message) {
+      frappe.show_alert({
+        message: __(message),
+        indicator: 'green'
+      });
+    },
+    showError(message) {
+      frappe.show_alert({
+        message: __(message),
+        indicator: 'red'
+      });
+    },
+    showInfo(message) {
+      frappe.show_alert({
+        message: __(message),
+        indicator: 'blue'
+      });
+    },
     check_opening_entry() {
       return frappe
         .call('posawesome.posawesome.api.posapp.check_opening_shift', {
@@ -154,6 +265,8 @@ export default {
 
   mounted: function () {
     this.$nextTick(function () {
+      this.initializeApp();
+      this.setupNetworkListeners();
       this.check_opening_entry();
       this.get_pos_setting();
       this.eventBus.on('close_opening_dialog', () => {

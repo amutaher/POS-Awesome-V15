@@ -42,6 +42,14 @@ export const CustomersDB = {
   },
   async getCustomers() {
     return db.customers.toArray();
+  },
+  async searchCustomers(query) {
+    return db.customers
+      .filter(customer => 
+        customer.customer_name.toLowerCase().includes(query.toLowerCase())
+      )
+      .limit(20)
+      .toArray();
   }
 };
 
@@ -66,8 +74,41 @@ export const InvoicesDB = {
   }
 };
 
+// Price Lists operations
+export const PriceListsDB = {
+  async savePriceLists(priceLists) {
+    return db.priceLists.bulkPut(priceLists);
+  },
+  async getPriceLists() {
+    return db.priceLists.toArray();
+  }
+};
+
+// Tax Rules operations
+export const TaxRulesDB = {
+  async saveTaxRules(taxRules) {
+    return db.taxRules.bulkPut(taxRules);
+  },
+  async getTaxRules() {
+    return db.taxRules.toArray();
+  }
+};
+
+// POS Profile operations
+export const PosProfileDB = {
+  async savePosProfile(profile) {
+    return db.pos_profile.put(profile);
+  },
+  async getPosProfile() {
+    return db.pos_profile.toArray();
+  }
+};
+
 export default {
   ItemsDB,
   CustomersDB,
-  InvoicesDB
+  InvoicesDB,
+  PriceListsDB,
+  TaxRulesDB,
+  PosProfileDB
 }; 
