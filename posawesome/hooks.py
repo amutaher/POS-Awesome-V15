@@ -25,9 +25,7 @@ app_include_js = [
 # include js, css files in header of web template
 # web_include_css = "/assets/posawesome/css/posawesome.css"
 # web_include_js = "/assets/posawesome/js/posawesome.js"
-web_include_js = [
-    "manifest.json",
-]
+web_include_js = []
 
 # include js, css files in header of web form
 # webform_include_js = {"doctype": "public/js/doctype.js"}
@@ -282,3 +280,8 @@ fixtures = [
         ]
     }
 ]
+
+# Website context for PWA
+website_context = {
+    "manifest_json": "/assets/posawesome/js/manifest.json"
+}
