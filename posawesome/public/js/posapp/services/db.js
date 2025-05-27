@@ -7,7 +7,7 @@ const db = new Dexie('PosAwesomeDB');
 db.version(1).stores({
   items: 'item_code, item_name, idx',
   customers: 'name, customer_name, email_id, mobile_no, tax_id, loyalty_program, customer_group, territory, customer_type, gender, posa_birthday, posa_discount, address_line1, city, country',
-  invoices: '++id, name, createdAt, status',
+  invoices: '++id, name, createdAt, status, sync_status, last_sync_attempt, retry_count, error_log, reference_id',
   priceLists: 'name, currency',
   taxRules: 'name',
   pos_profile: 'name, pos_profile_name, company, warehouse'
@@ -98,21 +98,108 @@ export const CustomersDB = {
 // Invoices operations
 export const InvoicesDB = {
   async addInvoice(invoice) {
+    const now = new Date().toISOString();
     return db.invoices.add({
       ...invoice,
-      createdAt: new Date().toISOString(),
-      status: 'pending'
+      createdAt: now,
+      status: 'pending',
+      sync_status: 'pending',
+      last_sync_attempt: null,
+      retry_count: 0,
+      error_log: [],
+      reference_id: invoice.args?.payload?.selected_invoices?.[0]?.name || null
     });
   },
+  
   async getPendingInvoices() {
-    return db.invoices.where('status').equals('pending').toArray();
+    return db.invoices
+      .where('status')
+      .anyOf(['pending', 'failed'])
+      .and(item => item.retry_count < 5)
+      .toArray();
   },
-  async updateInvoiceStatus(id, status, serverResponse = null) {
-    return db.invoices.update(id, { 
-      status, 
-      lastSyncAt: new Date().toISOString(),
-      serverResponse 
+  
+  async updateInvoiceStatus(id, status, response = null, retryCount = null, error = null) {
+    const invoice = await db.invoices.get(id);
+    if (!invoice) return;
+
+    const now = new Date().toISOString();
+    const update = {
+      status,
+      last_sync_attempt: now
+    };
+
+    // Update retry count if provided
+    if (retryCount !== null) {
+      update.retry_count = retryCount;
+    }
+
+    // Update sync status based on the status
+    switch (status) {
+      case 'synced':
+        update.sync_status = 'success';
+        break;
+      case 'failed':
+        update.sync_status = 'failed';
+        // Add error to error log
+        if (error) {
+          const errorLog = invoice.error_log || [];
+          errorLog.push({
+            timestamp: now,
+            error: error.message || error,
+            retry_count: retryCount
+          });
+          update.error_log = errorLog;
+        }
+        break;
+      case 'max_retries_reached':
+        update.sync_status = 'max_retries';
+        break;
+    }
+
+    // Add server response if available
+    if (response) {
+      update.server_response = response;
+    }
+
+    return db.invoices.update(id, update);
+  },
+
+  async getDuplicateInvoice(reference_id) {
+    if (!reference_id) return null;
+    
+    return db.invoices
+      .where('reference_id')
+      .equals(reference_id)
+      .and(item => item.sync_status === 'success')
+      .first();
+  },
+
+  async getSyncStats() {
+    const stats = {
+      pending: 0,
+      success: 0,
+      failed: 0,
+      max_retries: 0
+    };
+
+    const invoices = await db.invoices.toArray();
+    invoices.forEach(invoice => {
+      stats[invoice.sync_status] = (stats[invoice.sync_status] || 0) + 1;
     });
+
+    return stats;
+  },
+
+  async clearSyncedInvoices(daysToKeep = 7) {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
+    
+    return db.invoices
+      .where('sync_status')
+      .equals('success')
+      .and(item => new Date(item.last_sync_attempt) < cutoffDate)
+      .delete();
   }
 };
 

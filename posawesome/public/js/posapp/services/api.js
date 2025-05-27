@@ -232,67 +232,77 @@ export async function processPosPayment(payload) {
   }
 }
 
-// Process offline queue with retry mechanism
+// Process offline queue with enhanced error handling and deduplication
 export async function processQueue() {
-  if (!isOnline) {
-    console.log('Still offline, cannot process queue');
+  if (!navigator.onLine) {
+    console.log('Cannot process queue while offline');
     return;
   }
-  
-  console.log('Processing offline queue...');
+
   const pendingInvoices = await InvoicesDB.getPendingInvoices();
-  
+  console.log('Processing queue:', pendingInvoices.length, 'pending items');
+
   for (const invoice of pendingInvoices) {
     try {
-      console.log('Processing invoice/payment:', invoice);
+      // Check for duplicates before processing
+      const duplicate = await InvoicesDB.getDuplicateInvoice(
+        invoice.args?.payload?.selected_invoices?.[0]?.name
+      );
       
-      // Skip if max retries reached (5 attempts)
-      if (invoice.retryCount >= 5) {
-        await InvoicesDB.updateInvoiceStatus(
-          invoice.id, 
-          'max_retries_reached',
-          'Maximum retry attempts reached'
-        );
+      if (duplicate) {
+        console.log('Skipping duplicate invoice:', invoice.id);
+        await InvoicesDB.updateInvoiceStatus(invoice.id, 'synced', {
+          message: 'Duplicate invoice already processed',
+          reference: duplicate.id
+        });
         continue;
       }
-      
+
+      // Make the API call
       const response = await frappe.call({
         method: invoice.method,
         args: invoice.args,
-        freeze: true,
-        freeze_message: __("Processing Offline Data")
+        freeze: false
       });
-      
-      await InvoicesDB.updateInvoiceStatus(invoice.id, 'synced', response);
-      
-      frappe.show_alert({
-        message: __('Offline transaction synced successfully'),
-        indicator: 'green'
-      });
-    } catch (error) {
-      console.error('Failed to sync transaction:', error);
-      
-      // Increment retry count
-      const retryCount = (invoice.retryCount || 0) + 1;
-      await InvoicesDB.updateInvoiceStatus(
-        invoice.id, 
-        'failed',
-        error.message,
-        retryCount
-      );
-      
-      // Show error only on final retry
-      if (retryCount >= 5) {
+
+      if (response.message) {
+        await InvoicesDB.updateInvoiceStatus(invoice.id, 'synced', response.message);
+        
+        // Show success notification
         frappe.show_alert({
-          message: __('Failed to sync transaction after multiple attempts: ') + error.message,
-          indicator: 'red'
+          message: __('Payment synced successfully'),
+          indicator: 'green'
         });
       }
+    } catch (error) {
+      console.error('Error processing invoice:', invoice.id, error);
       
-      // Add exponential backoff delay before next retry
-      await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
+      // Increment retry count
+      const newRetryCount = (invoice.retry_count || 0) + 1;
+      const status = newRetryCount >= 5 ? 'max_retries_reached' : 'failed';
+      
+      await InvoicesDB.updateInvoiceStatus(
+        invoice.id,
+        status,
+        null,
+        newRetryCount,
+        error
+      );
+
+      // Show error notification
+      frappe.show_alert({
+        message: __('Error syncing payment. Will retry later.'),
+        indicator: 'red'
+      });
     }
   }
+
+  // Get sync stats after processing
+  const stats = await InvoicesDB.getSyncStats();
+  console.log('Sync stats:', stats);
+
+  // Clean up old synced invoices
+  await InvoicesDB.clearSyncedInvoices();
 }
 
 // Initial data sync
