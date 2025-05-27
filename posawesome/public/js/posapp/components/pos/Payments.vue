@@ -1100,7 +1100,39 @@ export default {
         customer_credit_dict: this.customer_credit_dict,
         is_cashback: this.is_cashback,
       };
+
       const vm = this;
+
+      // Check if we're online
+      if (!navigator.onLine) {
+        // Store invoice data in IndexedDB for later sync
+        this.storeOfflineInvoice(data, print)
+          .then(() => {
+            vm.eventBus.emit("show_message", {
+              title: __("Invoice saved offline. Will sync when online."),
+              color: "warning",
+            });
+            // Still proceed with local UI updates
+            vm.customer_credit_dict = [];
+            vm.redeem_customer_credit = false;
+            vm.is_cashback = true;
+            vm.sales_person = "";
+            vm.addresses = [];
+            vm.eventBus.emit("clear_invoice");
+            vm.eventBus.emit("reset_posting_date");
+            vm.back_to_invoice();
+          })
+          .catch(error => {
+            console.error("Failed to store offline invoice:", error);
+            vm.eventBus.emit("show_message", {
+              title: __("Failed to save invoice offline"),
+              color: "error",
+            });
+          });
+        return;
+      }
+
+      // Online submission
       frappe.call({
         method: "posawesome.posawesome.api.posapp.submit_invoice",
         args: {
@@ -1177,6 +1209,108 @@ export default {
           vm.back_to_invoice();
         }
       });
+    },
+    // Store invoice data in IndexedDB for offline support
+    async storeOfflineInvoice(data, print) {
+      // Generate a temporary offline ID
+      const offlineId = `offline_invoice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Prepare invoice data for storage
+      const invoiceData = {
+        id: offlineId,
+        data: data,
+        invoice: this.invoice_doc,
+        print: print,
+        timestamp: new Date().toISOString(),
+        synced: false
+      };
+
+      // Open/create IndexedDB database
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open("PosAwesomeOfflineDB", 1);
+
+        request.onerror = () => reject(request.error);
+
+        request.onupgradeneeded = (event) => {
+          const db = event.target.result;
+          if (!db.objectStoreNames.contains("offlineInvoices")) {
+            db.createObjectStore("offlineInvoices", { keyPath: "id" });
+          }
+        };
+
+        request.onsuccess = (event) => {
+          const db = event.target.result;
+          const transaction = db.transaction(["offlineInvoices"], "readwrite");
+          const store = transaction.objectStore("offlineInvoices");
+
+          const storeRequest = store.add(invoiceData);
+          
+          storeRequest.onsuccess = () => {
+            // Add event listener for online status if not already added
+            if (!window.hasOfflineInvoiceSyncListener) {
+              window.addEventListener('online', this.syncOfflineInvoices);
+              window.hasOfflineInvoiceSyncListener = true;
+            }
+            resolve();
+          };
+          
+          storeRequest.onerror = () => reject(storeRequest.error);
+        };
+      });
+    },
+    // Sync offline invoices when back online
+    async syncOfflineInvoices() {
+      const vm = this;
+      
+      // Open IndexedDB
+      const request = indexedDB.open("PosAwesomeOfflineDB", 1);
+      
+      request.onsuccess = async (event) => {
+        const db = event.target.result;
+        const transaction = db.transaction(["offlineInvoices"], "readwrite");
+        const store = transaction.objectStore("offlineInvoices");
+        
+        // Get all unsynced invoices
+        const getAllRequest = store.getAll();
+        
+        getAllRequest.onsuccess = async () => {
+          const offlineInvoices = getAllRequest.result.filter(inv => !inv.synced);
+          
+          for (const invoiceData of offlineInvoices) {
+            try {
+              // Submit each invoice
+              const response = await frappe.call({
+                method: "posawesome.posawesome.api.posapp.submit_invoice",
+                args: {
+                  data: invoiceData.data,
+                  invoice: invoiceData.invoice,
+                },
+              });
+
+              if (response.message) {
+                // Mark as synced in IndexedDB
+                invoiceData.synced = true;
+                store.put(invoiceData);
+
+                vm.eventBus.emit("show_message", {
+                  title: __("Offline invoice {0} synced successfully", [response.message.name]),
+                  color: "success",
+                });
+
+                if (invoiceData.print) {
+                  vm.load_print_page();
+                }
+              }
+            } catch (error) {
+              console.error("Error syncing offline invoice:", error);
+              vm.eventBus.emit("show_message", {
+                title: __("Failed to sync offline invoice"),
+                color: "error",
+              });
+            }
+          }
+        };
+      };
     },
     // Set full amount for a payment method (or negative for returns)
     set_full_amount(idx) {
