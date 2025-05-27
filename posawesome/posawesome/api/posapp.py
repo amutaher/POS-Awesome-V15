@@ -786,6 +786,25 @@ def generate_invoice_summary(invoice_doc):
     
     return summary
 
+def get_payment_origin_details(invoice_doc, data):
+    """Get structured payment origin details for tracking"""
+    origin = {
+        'source': 'POS Awesome',
+        'type': 'offline' if invoice_doc.is_pos else 'web',
+        'pos_profile': invoice_doc.pos_profile if invoice_doc.is_pos else None,
+        'shift': invoice_doc.posa_pos_opening_shift if invoice_doc.is_pos else None,
+        'user': frappe.session.user,
+        'timestamp': frappe.utils.now(),
+        'device': data.get('device_info', {})
+    }
+    
+    if invoice_doc.is_pos:
+        origin['offline_sync'] = bool(data.get('offline_sync'))
+        if data.get('offline_sync'):
+            origin['sync_timestamp'] = data.get('sync_timestamp')
+    
+    return origin
+
 @frappe.whitelist()
 def submit_invoice(invoice, data):
     data = json.loads(data)
@@ -866,6 +885,9 @@ def submit_invoice(invoice, data):
     
     # Rest of the existing submit_invoice code...
     
+    # Get payment origin details
+    payment_origin = get_payment_origin_details(invoice_doc, data)
+    
     # creating advance payment
     if data.get("credit_change"):
         advance_payment_entry = frappe.get_doc(
@@ -879,6 +901,14 @@ def submit_invoice(invoice, data):
                 "paid_amount": invoice_doc.get("credit_change"),
                 "received_amount": invoice_doc.get("credit_change"),
                 "company": invoice_doc.get("company"),
+                # Add origin tracking fields
+                "posa_payment_origin": frappe.as_json(payment_origin),
+                "posa_is_pos_payment": 1,
+                "posa_pos_profile": invoice_doc.pos_profile,
+                "posa_pos_opening_shift": invoice_doc.posa_pos_opening_shift,
+                "posa_created_by": frappe.session.user,
+                "posa_created_at": payment_origin['timestamp'],
+                "remarks": f"Auto payment entry created from POS Invoice {invoice_doc.name}\nOrigin: {payment_origin['type']}\nShift: {payment_origin['shift']}"
             }
         )
 
@@ -904,6 +934,8 @@ def submit_invoice(invoice, data):
                     "remarks": advance.remarks,
                     "advance_amount": advance.unallocated_amount,
                     "allocated_amount": row["credit_to_redeem"],
+                    # Add origin reference to advance allocation
+                    "posa_payment_origin": frappe.as_json(payment_origin)
                 }
 
                 invoice_doc.append("advances", advance_payment)
