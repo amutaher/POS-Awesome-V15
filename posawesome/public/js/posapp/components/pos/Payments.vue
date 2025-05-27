@@ -1553,41 +1553,44 @@ export default {
     async submit_payment_dialog() {
       try {
         if (this.payment_offline_mode) {
-          this.eventBus.emit('payment_complete', {
-            offline: true,
-            payment: {
-              mode_of_payment: 'Cash',
-              amount: this.payment_grand_total,
-              currency: this.payment_currency
-            }
+          // Store offline payment data
+          await this.storeOfflineInvoice({
+            data: {
+              total_change: !this.invoice_doc.is_return ? -this.diff_payment : 0,
+              paid_change: !this.invoice_doc.is_return ? this.paid_change : 0,
+              credit_change: -this.credit_change,
+              redeemed_customer_credit: this.redeemed_customer_credit,
+              customer_credit_dict: this.customer_credit_dict,
+              is_cashback: this.is_cashback,
+            },
+            invoice: this.invoice_doc,
+            print: false
           });
-          this.showInfo('Payment will be processed when online');
-        } else {
-          if (!navigator.onLine) {
-            this.showError('Cannot process payment while offline');
-            return;
-          }
-          
-          await this.process_payment();
+
+          this.eventBus.emit('show_message', {
+            title: __('Payment saved for offline processing'),
+            color: 'success'
+          });
+
+          // Clear current invoice and show new invoice page
+          this.customer_credit_dict = [];
+          this.redeem_customer_credit = false;
+          this.is_cashback = true;
+          this.sales_person = "";
+          this.addresses = [];
+          this.eventBus.emit("clear_invoice");
+          this.eventBus.emit("reset_posting_date");
+          this.back_to_invoice();
         }
         
         this.close_payment_dialog();
       } catch (error) {
         console.error('Payment submission error:', error);
-        this.showError('Failed to process payment');
+        this.eventBus.emit('show_message', {
+          title: __('Failed to process payment'),
+          color: 'error'
+        });
       }
-    },
-    showError(message) {
-      this.eventBus.emit('show_message', {
-        title: __(message),
-        color: 'error'
-      });
-    },
-    showInfo(message) {
-      this.eventBus.emit('show_message', {
-        title: __(message),
-        color: 'info'
-      });
     },
     // Enhanced error handling with user-friendly messages
     handleSubmissionError(error, data, print) {
@@ -1773,9 +1776,9 @@ export default {
 
     this.eventBus.on('show_payment', async (data) => {
       try {
-        this.payment_dialog = true;
-        
+        // Only show payment dialog in offline mode
         if (typeof data === 'object' && data.offline) {
+          this.payment_dialog = true;
           this.payment_offline_mode = true;
           this.invoice_doc = data.invoice_data;
           this.payments = data.invoice_data.payments || [];
@@ -1783,6 +1786,7 @@ export default {
           this.payment_currency = data.invoice_data.currency || 'PKR';
           this.selected_payment_mode = 'Cash';
         } else {
+          // In online mode, directly process without showing dialog
           this.payment_offline_mode = false;
           this.invoice_doc = typeof data === 'object' ? data.invoice_doc : null;
           
@@ -1790,17 +1794,21 @@ export default {
             try {
               await this.get_addresses();
               await this.get_sales_person_names();
-              this.payment_grand_total = this.invoice_doc.grand_total || 0;
-              this.payment_currency = this.invoice_doc.currency || 'PKR';
+              // Process payment directly
+              this.submit();
             } catch (error) {
-              console.error('Failed to fetch additional data:', error);
+              console.error('Failed to process online payment:', error);
+              this.eventBus.emit('show_message', {
+                title: __('Error processing payment'),
+                color: 'error'
+              });
             }
           }
         }
       } catch (error) {
-        console.error('Error in payment dialog:', error);
+        console.error('Error in payment handling:', error);
         this.eventBus.emit('show_message', {
-          title: __('Error loading payment dialog'),
+          title: __('Error processing payment'),
           color: 'error'
         });
       }
