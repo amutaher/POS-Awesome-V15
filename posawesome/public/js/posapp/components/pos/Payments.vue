@@ -708,6 +708,9 @@ export default {
       payment_currency: '',
       selected_payment_mode: 'Cash',
       payment_types: ['Cash', 'Card', 'Multiple'],
+      error_queue: [], // Queue for failed submissions to retry
+      max_retries: 3, // Maximum number of retry attempts
+      retry_delay: 1000, // Base delay for retry (will be multiplied by attempt count)
     };
   },
   computed: {
@@ -1022,7 +1025,7 @@ export default {
         return;
       }
 
-      // Online submission with retry mechanism
+      // Online submission with enhanced error handling
       const submitWithRetry = () => {
         frappe.call({
           method: "posawesome.posawesome.api.posapp.submit_invoice",
@@ -1033,70 +1036,25 @@ export default {
           callback: function (r) {
             if (r.exc) {
               console.error("Error submitting invoice:", r.exc);
-              let errorMsg = r.exc.toString();
               
-              // Handle network-related errors with retry logic
-              if (errorMsg.includes("NetworkError") || errorMsg.includes("Failed to fetch") || errorMsg.includes("timeout")) {
-                if (vm.submit_retry_count < 3) {
-                  vm.submit_retry_count++;
-                  vm.eventBus.emit("show_message", {
-                    title: __("Retrying submission... Attempt {0}/3", [vm.submit_retry_count]),
-                    color: "warning",
-                  });
-                  // Exponential backoff for retries
-                  setTimeout(submitWithRetry, 1000 * vm.submit_retry_count);
-                  return;
-                }
-              }
+              // Handle error with enhanced error reporting
+              const { canRetry, userMessage } = vm.handleSubmissionError(r.exc, data, print);
               
-              // Handle negative amount validation for returns
-              if (errorMsg.includes("Amount must be negative")) {
-                vm.eventBus.emit("show_message", {
-                  title: __("Fixing payment amounts for return invoice..."),
-                  color: "warning",
-                });
-                // Fix payment amounts to be negative
-                vm.invoice_doc.payments.forEach((payment) => {
-                  if (payment.amount > 0) {
-                    payment.amount = -Math.abs(payment.amount);
-                  }
-                  if (payment.base_amount > 0) {
-                    payment.base_amount = -Math.abs(payment.base_amount);
-                  }
-                });
-                // Reset retry count and attempt again
-                vm.submit_retry_count = 0;
-                setTimeout(submitWithRetry, 500);
+              if (canRetry && vm.submit_retry_count < vm.max_retries) {
+                vm.submit_retry_count++;
+                setTimeout(submitWithRetry, vm.retry_delay * vm.submit_retry_count);
                 return;
-              } 
+              }
               
-              // Handle POS Profile validation errors
-              else if (errorMsg.includes("not allowed in this POS Profile")) {
-                vm.is_processing_submit = false;
-                vm.eventBus.emit("show_message", {
-                  title: __(errorMsg),
-                  color: "error",
-                });
-                vm.eventBus.emit("update_pos_profile_restrictions");
-              }
-              // Handle all other errors
-              else {
-                vm.is_processing_submit = false;
-                vm.eventBus.emit("show_message", {
-                  title: __("Error submitting invoice: ") + errorMsg,
-                  color: "error",
-                });
-              }
               return;
             }
             
-            // Handle missing response
             if (!r.message) {
-              vm.is_processing_submit = false;
-              vm.eventBus.emit("show_message", {
-                title: __("Error submitting invoice: No response from server"),
-                color: "error",
-              });
+              vm.handleSubmissionError(
+                new Error("No response from server"),
+                data,
+                print
+              );
               return;
             }
             
@@ -1104,21 +1062,13 @@ export default {
             if (print) {
               vm.load_print_page();
             }
-            vm.customer_credit_dict = [];
-            vm.redeem_customer_credit = false;
-            vm.is_cashback = true;
-            vm.sales_person = "";
-            vm.eventBus.emit("set_last_invoice", vm.invoice_doc.name);
+            
+            vm.handleSuccessfulSubmission(r.message);
+            
             vm.eventBus.emit("show_message", {
               title: __("Invoice {0} is Submitted", [r.message.name]),
               color: "success",
             });
-            frappe.utils.play_sound("submit");
-            vm.addresses = [];
-            vm.eventBus.emit("clear_invoice");
-            vm.eventBus.emit("reset_posting_date");
-            vm.back_to_invoice();
-            vm.is_processing_submit = false;
           }
         });
       };
@@ -1638,6 +1588,164 @@ export default {
         title: __(message),
         color: 'info'
       });
+    },
+    // Enhanced error handling with user-friendly messages
+    handleSubmissionError(error, data, print) {
+      const vm = this;
+      const errorMsg = error.toString();
+      let userMessage = "";
+      let canRetry = false;
+      let shouldQueueForRetry = false;
+
+      // Categorize and handle different types of errors
+      if (errorMsg.includes("NetworkError") || errorMsg.includes("Failed to fetch") || errorMsg.includes("timeout")) {
+        userMessage = __("Network connection issue. The transaction will be retried automatically.");
+        canRetry = true;
+        shouldQueueForRetry = true;
+      } 
+      else if (errorMsg.includes("Amount must be negative")) {
+        userMessage = __("Fixing payment amounts for return invoice...");
+        canRetry = true;
+      }
+      else if (errorMsg.includes("not allowed in this POS Profile")) {
+        userMessage = errorMsg;
+        vm.eventBus.emit("update_pos_profile_restrictions");
+      }
+      else if (errorMsg.includes("Insufficient stock")) {
+        userMessage = __("Some items are out of stock. Please update quantities.");
+      }
+      else if (errorMsg.includes("Payment validation failed")) {
+        userMessage = __("Payment validation failed. Please check payment amounts.");
+      }
+      else if (errorMsg.includes("Customer credit limit exceeded")) {
+        userMessage = __("Customer credit limit has been exceeded.");
+      }
+      else {
+        userMessage = __("Error submitting invoice: {0}", [errorMsg]);
+      }
+
+      // Show error message to user
+      vm.eventBus.emit("show_message", {
+        title: userMessage,
+        color: canRetry ? "warning" : "error",
+        timeout: 5000, // Show message for 5 seconds
+      });
+
+      // Play error sound for non-retryable errors
+      if (!canRetry) {
+        frappe.utils.play_sound("error");
+      }
+
+      // Add to retry queue if needed
+      if (shouldQueueForRetry && vm.error_queue.length < 5) {
+        vm.error_queue.push({
+          data: data,
+          print: print,
+          attempts: 0,
+          timestamp: new Date().getTime()
+        });
+        
+        // Start retry process if not already running
+        if (vm.error_queue.length === 1) {
+          vm.processRetryQueue();
+        }
+      }
+
+      // Reset processing state if not retrying
+      if (!canRetry) {
+        vm.is_processing_submit = false;
+      }
+
+      return { canRetry, userMessage };
+    },
+
+    // Process retry queue
+    async processRetryQueue() {
+      const vm = this;
+      
+      while (vm.error_queue.length > 0) {
+        const currentItem = vm.error_queue[0];
+        
+        // Check if max retries reached
+        if (currentItem.attempts >= vm.max_retries) {
+          vm.error_queue.shift(); // Remove from queue
+          vm.eventBus.emit("show_message", {
+            title: __("Maximum retry attempts reached. Please try submitting again."),
+            color: "error",
+          });
+          continue;
+        }
+
+        // Calculate delay with exponential backoff
+        const delay = vm.retry_delay * Math.pow(2, currentItem.attempts);
+        
+        try {
+          // Wait for delay
+          await new Promise(resolve => setTimeout(resolve, delay));
+          
+          // Attempt submission
+          const response = await frappe.call({
+            method: "posawesome.posawesome.api.posapp.submit_invoice",
+            args: {
+              data: currentItem.data,
+              invoice: vm.invoice_doc,
+            }
+          });
+
+          if (response.message) {
+            // Success - remove from queue
+            vm.error_queue.shift();
+            
+            vm.eventBus.emit("show_message", {
+              title: __("Retry successful! Invoice {0} is submitted.", [response.message.name]),
+              color: "success",
+            });
+
+            // Handle successful submission
+            if (currentItem.print) {
+              vm.load_print_page();
+            }
+            vm.handleSuccessfulSubmission(response.message);
+          } else {
+            throw new Error("No response from server");
+          }
+        } catch (error) {
+          // Increment attempt counter
+          currentItem.attempts++;
+          
+          // Update user on retry status
+          vm.eventBus.emit("show_message", {
+            title: __("Retry attempt {0}/{1} failed. Will retry again shortly.", [currentItem.attempts, vm.max_retries]),
+            color: "warning",
+          });
+          
+          // If max retries not reached, continue to next iteration
+          if (currentItem.attempts < vm.max_retries) {
+            continue;
+          }
+          
+          // Max retries reached - remove from queue
+          vm.error_queue.shift();
+        }
+      }
+      
+      // Reset processing state when queue is empty
+      vm.is_processing_submit = false;
+    },
+
+    // Handle successful submission
+    handleSuccessfulSubmission(message) {
+      this.customer_credit_dict = [];
+      this.redeem_customer_credit = false;
+      this.is_cashback = true;
+      this.sales_person = "";
+      this.eventBus.emit("set_last_invoice", message.name);
+      frappe.utils.play_sound("submit");
+      this.addresses = [];
+      this.eventBus.emit("clear_invoice");
+      this.eventBus.emit("reset_posting_date");
+      this.back_to_invoice();
+      this.is_processing_submit = false;
     },
   },
   created() {
