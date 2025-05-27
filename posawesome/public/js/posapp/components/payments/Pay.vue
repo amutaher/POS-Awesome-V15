@@ -653,15 +653,21 @@ export default {
         this.total_selected_mpesa_payments
       );
 
-      frappe.call({
-        method: "posawesome.posawesome.api.payment_entry.process_pos_payment",
-        args: { payload },
-        freeze: true,
-        freeze_message: __("Processing Payment"),
-        callback: function (r) {
+      import { processPosPayment } from '../../services/api';
+      
+      processPosPayment(payload)
+        .then((r) => {
           vm.isSubmitting = false;
-          if (r.message) {
-            frappe.utils.play_sound("submit");
+          if (r.message || r.offline) {
+            if (r.offline) {
+              frappe.show_alert({
+                message: r.message,
+                indicator: 'orange'
+              });
+            } else {
+              frappe.utils.play_sound("submit");
+            }
+            
             vm.clear_all(false);
             vm.customer_name = customer;
             vm.get_outstanding_invoices();
@@ -669,23 +675,28 @@ export default {
             vm.set_mpesa_search_params();
             vm.get_draft_mpesa_payments_register();
           }
-        },
-        error: function() {
+        })
+        .catch((error) => {
           vm.isSubmitting = false;
-        }
-      });
+          frappe.msgprint({
+            title: __('Payment Failed'),
+            indicator: 'red',
+            message: __(error.message || 'Something went wrong while processing payment')
+          });
+        });
     },
     submit_and_print() {
       if (this.isSubmitting) return;
       this.isSubmitting = true;
       const customer = this.customer_name;
       const vm = this;
+      
       if (!customer) {
         this.isSubmitting = false;
         frappe.throw(__("Please select a customer"));
         return;
       }
-    
+
       // Check if we have selected invoices
       if (this.selected_invoices.length == 0) {
         this.isSubmitting = false;
@@ -726,28 +737,33 @@ export default {
         this.total_selected_mpesa_payments
       );
 
-      frappe.call({
-        method: "posawesome.posawesome.api.payment_entry.process_pos_payment",
-        args: { payload },
-        freeze: true,
-        freeze_message: __("Processing Payment"),
-        callback: function (r) {
+      import { processPosPayment } from '../../services/api';
+      
+      processPosPayment(payload)
+        .then((r) => {
           vm.isSubmitting = false;
-          if (r.message) {
-            console.log("Server response:", JSON.stringify(r.message));
-            frappe.utils.play_sound("submit");
-            
-            // Extract payment name from server response
-            const payment_name = r.message.new_payments_entry && r.message.new_payments_entry.length > 0 
-                ? r.message.new_payments_entry[0].name : null;
-            
-            if (payment_name) {
-              console.log("Opening print view with payment name:", payment_name);
-              vm.load_print_page(payment_name);
+          if (r.message || r.offline) {
+            if (r.offline) {
+              frappe.show_alert({
+                message: r.message,
+                indicator: 'orange'
+              });
             } else {
-              console.log("No payment_name found in response");
-              frappe.msgprint(__("Payment submitted but print function could not be executed. Payment name not found."));
+              frappe.utils.play_sound("submit");
+              
+              // Extract payment name from server response
+              const payment_name = r.message.new_payments_entry && r.message.new_payments_entry.length > 0 
+                  ? r.message.new_payments_entry[0].name : null;
+              
+              if (payment_name) {
+                console.log("Opening print view with payment name:", payment_name);
+                vm.load_print_page(payment_name);
+              } else {
+                console.log("No payment_name found in response");
+                frappe.msgprint(__("Payment submitted but print function could not be executed. Payment name not found."));
+              }
             }
+            
             vm.clear_all(false);
             vm.customer_name = customer;
             vm.get_outstanding_invoices();
@@ -755,11 +771,15 @@ export default {
             vm.set_mpesa_search_params();
             vm.get_draft_mpesa_payments_register();
           }
-        },
-        error: function() {
+        })
+        .catch((error) => {
           vm.isSubmitting = false;
-        }
-      });
+          frappe.msgprint({
+            title: __('Payment Failed'),
+            indicator: 'red',
+            message: __(error.message || 'Something went wrong while processing payment')
+          });
+        });
     },
     selectSingleInvoice(item) {
       console.log("Row clicked:", item);

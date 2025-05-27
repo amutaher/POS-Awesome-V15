@@ -174,7 +174,65 @@ async function syncToIndexedDB(method, data) {
   }
 }
 
-// Process offline queue
+// Process POS Payment with offline support
+export async function processPosPayment(payload) {
+  try {
+    if (navigator.onLine) {
+      // Try online first
+      const response = await frappe.call({
+        method: "posawesome.posawesome.api.payment_entry.process_pos_payment",
+        args: { payload },
+        freeze: true,
+        freeze_message: __("Processing Payment")
+      });
+      
+      return response;
+    } else {
+      // Store payment in IndexedDB for later processing
+      const payment = {
+        method: "posawesome.posawesome.api.payment_entry.process_pos_payment",
+        args: { payload },
+        createdAt: new Date().toISOString(),
+        status: 'pending',
+        retryCount: 0
+      };
+      
+      const id = await InvoicesDB.addInvoice(payment);
+      
+      return {
+        offline: true,
+        queued: true,
+        message: __('Payment saved offline. Will process when online.'),
+        payment_id: id
+      };
+    }
+  } catch (error) {
+    // If online request fails, store for retry
+    if (navigator.onLine) {
+      const payment = {
+        method: "posawesome.posawesome.api.payment_entry.process_pos_payment",
+        args: { payload },
+        createdAt: new Date().toISOString(),
+        status: 'failed',
+        error: error.message,
+        retryCount: 0
+      };
+      
+      const id = await InvoicesDB.addInvoice(payment);
+      
+      return {
+        offline: false,
+        queued: true,
+        message: __('Payment failed. Will retry automatically.'),
+        payment_id: id,
+        error: error.message
+      };
+    }
+    throw error;
+  }
+}
+
+// Process offline queue with retry mechanism
 export async function processQueue() {
   if (!isOnline) {
     console.log('Still offline, cannot process queue');
@@ -186,26 +244,53 @@ export async function processQueue() {
   
   for (const invoice of pendingInvoices) {
     try {
-      console.log('Processing invoice:', invoice);
+      console.log('Processing invoice/payment:', invoice);
+      
+      // Skip if max retries reached (5 attempts)
+      if (invoice.retryCount >= 5) {
+        await InvoicesDB.updateInvoiceStatus(
+          invoice.id, 
+          'max_retries_reached',
+          'Maximum retry attempts reached'
+        );
+        continue;
+      }
+      
       const response = await frappe.call({
         method: invoice.method,
-        args: invoice.args
+        args: invoice.args,
+        freeze: true,
+        freeze_message: __("Processing Offline Data")
       });
       
       await InvoicesDB.updateInvoiceStatus(invoice.id, 'synced', response);
       
       frappe.show_alert({
-        message: __('Offline invoice synced successfully'),
+        message: __('Offline transaction synced successfully'),
         indicator: 'green'
       });
     } catch (error) {
-      console.error('Failed to sync invoice:', error);
-      await InvoicesDB.updateInvoiceStatus(invoice.id, 'error', error.message);
+      console.error('Failed to sync transaction:', error);
       
-      frappe.show_alert({
-        message: __('Failed to sync offline invoice: ') + error.message,
-        indicator: 'red'
-      });
+      // Increment retry count
+      const retryCount = (invoice.retryCount || 0) + 1;
+      await InvoicesDB.updateInvoiceStatus(
+        invoice.id, 
+        'failed',
+        error.message,
+        retryCount
+      );
+      
+      // Show error only on final retry
+      if (retryCount >= 5) {
+        frappe.show_alert({
+          message: __('Failed to sync transaction after multiple attempts: ') + error.message,
+          indicator: 'red'
+        });
+      }
+      
+      // Add exponential backoff delay before next retry
+      await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
     }
   }
 }
