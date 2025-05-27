@@ -891,6 +891,22 @@ def submit_in_background_job(kwargs):
     cash_account = kwargs.get("cash_account")
     payments = kwargs.get("payments")
 
+    # Check if invoice already exists and is submitted
+    try:
+        existing_invoice = frappe.get_doc("Sales Invoice", invoice)
+        if existing_invoice.docstatus == 1:
+            frappe.log_error(
+                f"Skipping duplicate replay for invoice {invoice} - already submitted",
+                "POS Invoice Replay"
+            )
+            return {
+                "name": existing_invoice.name,
+                "status": existing_invoice.docstatus,
+                "message": "Invoice already submitted"
+            }
+    except Exception as e:
+        frappe.log_error(f"Error checking invoice status: {str(e)}", "POS Invoice Replay")
+
     invoice_doc = frappe.get_doc("Sales Invoice", invoice)
     
     # Validate all dynamic fields including loyalty and credit redemptions
@@ -914,6 +930,12 @@ def submit_in_background_job(kwargs):
     redeeming_customer_credit(
         invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
     )
+    
+    return {
+        "name": invoice_doc.name,
+        "status": invoice_doc.docstatus,
+        "message": "Invoice submitted successfully"
+    }
 
 
 @frappe.whitelist()

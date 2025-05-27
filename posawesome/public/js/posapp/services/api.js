@@ -299,12 +299,22 @@ export async function processQueue() {
         freeze: false
       });
 
+      // Handle response
       if (response.message) {
-        await InvoicesDB.updateInvoiceStatus(invoice.id, 'synced', response.message);
+        // Check if response indicates invoice was already submitted
+        if (response.message.status === 1 && response.message.message === "Invoice already submitted") {
+          console.log('Invoice already submitted:', invoice.id);
+          await InvoicesDB.updateInvoiceStatus(invoice.id, 'synced', {
+            message: 'Invoice was already submitted',
+            reference: response.message.name
+          });
+        } else {
+          await InvoicesDB.updateInvoiceStatus(invoice.id, 'synced', response.message);
+        }
         
         // Show success notification
         frappe.show_alert({
-          message: __('Payment synced successfully'),
+          message: __(response.message.message || 'Payment synced successfully'),
           indicator: 'green'
         });
       }
