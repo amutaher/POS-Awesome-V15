@@ -437,37 +437,49 @@ export default {
       });
     },
     async check_opening_entry() {
-      if (!this.isOnline) {
-        // Use offline profile if available
-        const offlineProfile = await PosProfileDB.getCurrentProfile();
-        if (offlineProfile) {
-          this.pos_profile = offlineProfile;
-          this.eventBus.emit('register_pos_profile', offlineProfile);
-          return;
-        }
-      }
-      
-      return frappe
-        .call('posawesome.posawesome.api.posapp.check_opening_shift', {
-          user: frappe.session.user,
-        })
-        .then((r) => {
-          if (r.message) {
-            this.pos_profile = r.message.pos_profile;
-            this.pos_opening_shift = r.message.pos_opening_shift;
-            
-            // Save profile for offline use
-            PosProfileDB.savePosProfile(r.message.pos_profile);
-            
-            this.get_offers(this.pos_profile.name);
-            this.eventBus.emit('register_pos_profile', r.message);
-            this.eventBus.emit('set_company', r.message.company);
-            frappe.realtime.emit('pos_profile_registered');
-            console.info('LoadPosProfile');
-          } else {
-            this.create_opening_voucher();
+      try {
+        const result = await frappe.call({
+          method: 'posawesome.posawesome.api.posapp.check_opening_shift',
+          args: {
+            user: frappe.session.user
           }
         });
+
+        if (result.message) {
+          // First set the pos_profile
+          this.pos_profile = result.message.pos_profile;
+          this.pos_opening_shift = result.message.pos_opening_shift;
+          
+          // Only emit events after pos_profile is set
+          if (this.pos_profile) {
+            this.eventBus.emit('register_pos_data', result.message);
+            this.eventBus.emit('set_company', result.message.company);
+            
+            // Initialize payment methods only if pos_profile exists
+            if (this.pos_profile.payments) {
+              this.payment_methods = this.pos_profile.payments.map(method => ({
+                mode_of_payment: method.mode_of_payment,
+                amount: 0,
+                row_id: method.name
+              }));
+            }
+          } else {
+            // If no pos_profile, show opening dialog
+            this.dialog = true;
+          }
+        } else {
+          // No opening shift found, show dialog
+          this.dialog = true;
+        }
+      } catch (error) {
+        console.error('Error checking opening entry:', error);
+        frappe.msgprint({
+          title: __('Error'),
+          indicator: 'red',
+          message: __('Failed to check opening entry: {0}', [error.message])
+        });
+        this.dialog = true;
+      }
     },
     create_opening_voucher() {
       this.dialog = true;
