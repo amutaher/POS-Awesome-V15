@@ -437,6 +437,16 @@ export default {
       });
     },
     async check_opening_entry() {
+      if (!this.isOnline) {
+        // Use offline profile if available
+        const offlineProfile = await PosProfileDB.getCurrentProfile();
+        if (offlineProfile) {
+          this.pos_profile = offlineProfile;
+          this.eventBus.emit('register_pos_profile', offlineProfile);
+          return;
+        }
+      }
+      
       try {
         const result = await frappe.call({
           method: 'posawesome.posawesome.api.posapp.check_opening_shift',
@@ -446,29 +456,29 @@ export default {
         });
 
         if (result.message) {
-          // First set the pos_profile
+          // First set the pos_profile and opening shift
           this.pos_profile = result.message.pos_profile;
           this.pos_opening_shift = result.message.pos_opening_shift;
           
-          // Only emit events after pos_profile is set
+          // Emit events only if we have valid data
           if (this.pos_profile) {
             this.eventBus.emit('register_pos_data', result.message);
             this.eventBus.emit('set_company', result.message.company);
             
-            // Initialize payment methods only if pos_profile exists
-            if (this.pos_profile.payments) {
-              this.payment_methods = this.pos_profile.payments.map(method => ({
-                mode_of_payment: method.mode_of_payment,
-                amount: 0,
-                row_id: method.name
-              }));
+            // Get offers if profile exists
+            if (this.pos_profile.name) {
+              this.get_offers(this.pos_profile.name);
             }
+            
+            // Save profile for offline use
+            PosProfileDB.savePosProfile(this.pos_profile);
+            
+            frappe.realtime.emit('pos_profile_registered');
+            console.info('LoadPosProfile');
           } else {
-            // If no pos_profile, show opening dialog
             this.dialog = true;
           }
         } else {
-          // No opening shift found, show dialog
           this.dialog = true;
         }
       } catch (error) {
