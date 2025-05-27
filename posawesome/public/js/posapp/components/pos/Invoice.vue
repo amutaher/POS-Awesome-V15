@@ -853,6 +853,13 @@ export default {
 
     // Reset all invoice fields to default/empty values
     clear_invoice() {
+      // Clear draft states for all items
+      if (this.items && this.items.length) {
+        this.items.forEach(item => {
+          this.clear_item_draft_state(item);
+        });
+      }
+
       this.items = [];
       this.posa_offers = [];
       this.expanded = [];
@@ -1013,6 +1020,8 @@ export default {
           if (item.batch_no) {
             this.set_batch_qty(item, item.batch_no);
           }
+          // Try to restore draft state for the item
+          this.restore_item_draft_state(item);
         });
       } else {
         console.log("Warning: No items in return invoice");
@@ -1259,9 +1268,10 @@ export default {
       doc.plc_conversion_rate = doc.conversion_rate;
       doc.ignore_default_fields = 1;  // Add this to prevent default field updates
       
-      // Add custom fields to track offer rates and cancellation status
+      // Add custom fields to track offer rates, cancellation status and draft states
       doc.posa_is_offer_applied = this.posa_offers.length > 0 ? 1 : 0;
       doc.locally_canceled = this.locally_canceled;
+      doc.posa_item_drafts = this.invoice_doc?.posa_item_drafts || {};
       
       // Calculate base amounts using the exchange rate
       if (this.selected_currency !== this.pos_profile.currency) {
@@ -2303,6 +2313,19 @@ export default {
           item.base_discount_amount = item.price_list_rate;
           item.discount_percentage = 100;
         }
+
+        // Calculate final amounts
+        item.amount = this.flt(item.qty * item.rate, this.currency_precision);
+        item.base_amount = this.flt(item.qty * item.base_rate, this.currency_precision);
+
+        // Save computed values to draft state
+        this.save_item_draft_state(item, {
+          rate: original_rate,
+          base_rate: original_base_rate,
+          discount_amount: original_discount_amount,
+          base_discount_amount: original_base_discount_amount,
+          discount_percentage: original_discount_percentage
+        });
 
         // Update stock calculations and force UI update
         this.calc_stock_qty(item, item.qty);
@@ -4165,6 +4188,104 @@ export default {
         title: __(message),
         color: "error"
       });
+    },
+
+    // Save item's computed values to draft state
+    save_item_draft_state(item, original_values = null) {
+      try {
+        // Get current timestamp
+        const timestamp = new Date().toISOString();
+        
+        // Create draft state object
+        const draft_state = {
+          timestamp,
+          item_code: item.item_code,
+          posa_row_id: item.posa_row_id,
+          rate: item.rate,
+          base_rate: item.base_rate,
+          price_list_rate: item.price_list_rate,
+          base_price_list_rate: item.base_price_list_rate,
+          discount_amount: item.discount_amount,
+          base_discount_amount: item.base_discount_amount,
+          discount_percentage: item.discount_percentage,
+          qty: item.qty,
+          amount: item.amount,
+          base_amount: item.base_amount,
+          original_values
+        };
+
+        // Store in localStorage with unique key
+        const draft_key = `posa_item_draft_${item.posa_row_id}`;
+        localStorage.setItem(draft_key, JSON.stringify(draft_state));
+
+        // Also store in invoice_doc for backend sync
+        if (this.invoice_doc) {
+          if (!this.invoice_doc.posa_item_drafts) {
+            this.invoice_doc.posa_item_drafts = {};
+          }
+          this.invoice_doc.posa_item_drafts[item.posa_row_id] = draft_state;
+        }
+
+        console.log(`Saved draft state for item ${item.item_code}:`, draft_state);
+      } catch (error) {
+        console.error('Error saving item draft state:', error);
+      }
+    },
+
+    // Restore item's draft state if available
+    restore_item_draft_state(item) {
+      try {
+        const draft_key = `posa_item_draft_${item.posa_row_id}`;
+        const stored_draft = localStorage.getItem(draft_key);
+        
+        if (stored_draft) {
+          const draft_state = JSON.parse(stored_draft);
+          
+          // Check if draft is still valid (not too old)
+          const draft_time = new Date(draft_state.timestamp).getTime();
+          const current_time = new Date().getTime();
+          const time_diff = current_time - draft_time;
+          
+          // If draft is less than 24 hours old, restore it
+          if (time_diff < 24 * 60 * 60 * 1000) {
+            // Restore values
+            item.rate = draft_state.rate;
+            item.base_rate = draft_state.base_rate;
+            item.price_list_rate = draft_state.price_list_rate;
+            item.base_price_list_rate = draft_state.base_price_list_rate;
+            item.discount_amount = draft_state.discount_amount;
+            item.base_discount_amount = draft_state.base_discount_amount;
+            item.discount_percentage = draft_state.discount_percentage;
+            item.qty = draft_state.qty;
+            item.amount = draft_state.amount;
+            item.base_amount = draft_state.base_amount;
+            
+            console.log(`Restored draft state for item ${item.item_code}:`, draft_state);
+            return true;
+          } else {
+            // Remove expired draft
+            localStorage.removeItem(draft_key);
+          }
+        }
+        return false;
+      } catch (error) {
+        console.error('Error restoring item draft state:', error);
+        return false;
+      }
+    },
+
+    // Clear item's draft state
+    clear_item_draft_state(item) {
+      try {
+        const draft_key = `posa_item_draft_${item.posa_row_id}`;
+        localStorage.removeItem(draft_key);
+        
+        if (this.invoice_doc?.posa_item_drafts) {
+          delete this.invoice_doc.posa_item_drafts[item.posa_row_id];
+        }
+      } catch (error) {
+        console.error('Error clearing item draft state:', error);
+      }
     },
   },
 
