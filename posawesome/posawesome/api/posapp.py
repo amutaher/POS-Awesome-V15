@@ -2263,11 +2263,110 @@ def get_sales_invoice_child_table(sales_invoice, sales_invoice_item):
 
 @frappe.whitelist()
 def update_invoice_from_order(data):
-     data = json.loads(data)
-     invoice_doc = frappe.get_doc("Sales Invoice", data.get("name"))
-     invoice_doc.update(data)
-     invoice_doc.save()
-     return invoice_doc
+    data = json.loads(data)
+    invoice_name = data.get("name")
+    
+    if not invoice_name:
+        frappe.throw(_("Invoice name is required"))
+        
+    # Get existing invoice and validate docstatus
+    existing_invoice = frappe.get_doc("Sales Invoice", invoice_name)
+    if existing_invoice.docstatus != 0:
+        frappe.throw(_("Cannot update submitted or cancelled invoice {0}").format(invoice_name))
+    
+    # Store original values for logging
+    original_values = {
+        'customer': existing_invoice.customer,
+        'total': existing_invoice.total,
+        'grand_total': existing_invoice.grand_total,
+        'items': [{
+            'item_code': item.item_code,
+            'qty': item.qty,
+            'rate': item.rate,
+            'amount': item.amount
+        } for item in existing_invoice.items],
+        'payments': [{
+            'mode_of_payment': payment.mode_of_payment,
+            'amount': payment.amount
+        } for payment in existing_invoice.payments]
+    }
+    
+    # Update the invoice
+    invoice_doc = frappe.get_doc("Sales Invoice", invoice_name)
+    invoice_doc.update(data)
+    
+    # Track changes for logging
+    changes = {
+        'customer': invoice_doc.customer if invoice_doc.customer != original_values['customer'] else None,
+        'total': invoice_doc.total if invoice_doc.total != original_values['total'] else None,
+        'grand_total': invoice_doc.grand_total if invoice_doc.grand_total != original_values['grand_total'] else None,
+        'items_changed': [],
+        'payments_changed': []
+    }
+    
+    # Track item changes
+    for idx, item in enumerate(invoice_doc.items):
+        if idx < len(original_values['items']):
+            orig_item = original_values['items'][idx]
+            if (item.item_code != orig_item['item_code'] or 
+                item.qty != orig_item['qty'] or 
+                item.rate != orig_item['rate'] or 
+                item.amount != orig_item['amount']):
+                changes['items_changed'].append({
+                    'item_code': item.item_code,
+                    'original': orig_item,
+                    'new': {
+                        'qty': item.qty,
+                        'rate': item.rate,
+                        'amount': item.amount
+                    }
+                })
+        else:
+            # New item added
+            changes['items_changed'].append({
+                'item_code': item.item_code,
+                'original': None,
+                'new': {
+                    'qty': item.qty,
+                    'rate': item.rate,
+                    'amount': item.amount
+                }
+            })
+    
+    # Track payment changes
+    for idx, payment in enumerate(invoice_doc.payments):
+        if idx < len(original_values['payments']):
+            orig_payment = original_values['payments'][idx]
+            if (payment.mode_of_payment != orig_payment['mode_of_payment'] or 
+                payment.amount != orig_payment['amount']):
+                changes['payments_changed'].append({
+                    'mode_of_payment': payment.mode_of_payment,
+                    'original': orig_payment,
+                    'new': {
+                        'amount': payment.amount
+                    }
+                })
+        else:
+            # New payment added
+            changes['payments_changed'].append({
+                'mode_of_payment': payment.mode_of_payment,
+                'original': None,
+                'new': {
+                    'amount': payment.amount
+                }
+            })
+    
+    # Log the changes
+    if any(changes.values()):
+        frappe.log_error(
+            message=f"Invoice {invoice_name} updated with changes: {frappe.as_json(changes)}",
+            title="POS Invoice Update"
+        )
+    
+    invoice_doc.flags.ignore_permissions = True
+    invoice_doc.save()
+    
+    return invoice_doc
 
 @frappe.whitelist()
 def validate_return_items(return_against, items):
