@@ -757,7 +757,7 @@ export default {
               
               if (payment_name) {
                 console.log("Opening print view with payment name:", payment_name);
-                vm.load_print_page(payment_name);
+                this.load_print_page(payment_name);
               } else {
                 console.log("No payment_name found in response");
                 frappe.msgprint(__("Payment submitted but print function could not be executed. Payment name not found."));
@@ -814,23 +814,86 @@ export default {
       return this.isInvoiceSelected(item) ? 'selected-row bg-primary bg-lighten-4' : '';
     },
     
-    load_print_page(payment_name) {
+    async load_print_page(payment_name) {
       if (!payment_name) {
         frappe.msgprint(__("Payment name not found. Cannot open print view."));
         return;
       }
 
-      // Use simplest URL possible to avoid errors
-      const url = 
-        frappe.urllib.get_base_url() +
-        "/printview?doctype=Payment%20Entry" +
-        "&name=" + payment_name +
-        "&trigger_print=1";
+      try {
+        // Verify payment submission status
+        const payment_status = await frappe.db.get_value(
+          'Payment Entry',
+          payment_name,
+          ['docstatus', 'name', 'status'],
+          { cache: false }
+        );
 
-      console.log("Opening printing URL:", url);
-      
-      // Open in new window/tab
-      window.open(url, '_blank');
+        if (!payment_status || !payment_status.message) {
+          frappe.msgprint(__("Could not verify payment status. Please try printing from the Payment Entry."));
+          return;
+        }
+
+        const { docstatus, status } = payment_status.message;
+
+        // Check if payment is submitted (docstatus = 1)
+        if (docstatus !== 1) {
+          frappe.msgprint(__("Payment {0} is not yet submitted. Please wait and try again.", [payment_name]));
+          
+          // Add to retry queue if needed
+          if (docstatus === 0) {
+            setTimeout(() => this.retryPrintPayment(payment_name), 2000);
+          }
+          return;
+        }
+
+        // Use simplest URL possible to avoid errors
+        const url = 
+          frappe.urllib.get_base_url() +
+          "/printview?doctype=Payment%20Entry" +
+          "&name=" + payment_name +
+          "&trigger_print=1";
+
+        console.log("Opening printing URL:", url);
+        
+        // Open in new window/tab
+        window.open(url, '_blank');
+      } catch (error) {
+        console.error("Error verifying payment status:", error);
+        frappe.msgprint({
+          title: __("Print Error"),
+          message: __("Error verifying payment status. Please try printing from the Payment Entry directly."),
+          indicator: 'red'
+        });
+      }
+    },
+    // Helper function to retry print after delay
+    async retryPrintPayment(payment_name, retryCount = 0) {
+      if (retryCount >= 3) {
+        frappe.msgprint(__("Could not confirm payment submission after multiple attempts. Please try printing from the Payment Entry."));
+        return;
+      }
+
+      try {
+        const payment_status = await frappe.db.get_value(
+          'Payment Entry',
+          payment_name,
+          ['docstatus', 'status'],
+          { cache: false }
+        );
+
+        if (payment_status?.message?.docstatus === 1) {
+          this.load_print_page(payment_name);
+        } else {
+          // Exponential backoff for retry
+          setTimeout(
+            () => this.retryPrintPayment(payment_name, retryCount + 1),
+            Math.pow(2, retryCount + 1) * 1000
+          );
+        }
+      } catch (error) {
+        console.error("Error in retry print:", error);
+      }
     },
   },
 
