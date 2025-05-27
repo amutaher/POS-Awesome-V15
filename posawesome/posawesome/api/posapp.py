@@ -720,6 +720,72 @@ def sanitize_invoice_data(invoice_data):
     
     return sanitized
 
+def generate_invoice_summary(invoice_doc):
+    """Generate structured summary of invoice items and totals"""
+    summary = {
+        'timestamp': frappe.utils.now(),
+        'invoice_items': [],
+        'totals': {
+            'subtotal': 0,
+            'discount_total': 0,
+            'tax_total': 0,
+            'grand_total': invoice_doc.grand_total,
+            'in_words': invoice_doc.in_words
+        },
+        'payments': [],
+        'customer_info': {
+            'customer': invoice_doc.customer,
+            'customer_name': invoice_doc.customer_name,
+            'tax_id': invoice_doc.tax_id
+        }
+    }
+    
+    # Summarize items
+    for item in invoice_doc.items:
+        if item.item_name and item.rate and item.qty:
+            item_total = item.rate * item.qty
+            summary['invoice_items'].append({
+                'item_code': item.item_code,
+                'item_name': item.item_name,
+                'qty': item.qty,
+                'uom': item.uom,
+                'rate': item.rate,
+                'discount_percentage': item.discount_percentage,
+                'discount_amount': item.discount_amount,
+                'total': item_total
+            })
+            summary['totals']['subtotal'] += item_total
+            if item.discount_amount:
+                summary['totals']['discount_total'] += item.discount_amount
+    
+    # Summarize taxes
+    if invoice_doc.taxes:
+        for tax in invoice_doc.taxes:
+            summary['totals']['tax_total'] += tax.tax_amount
+    
+    # Summarize payments
+    for payment in invoice_doc.payments:
+        summary['payments'].append({
+            'mode': payment.mode_of_payment,
+            'amount': payment.amount,
+            'type': payment.type
+        })
+    
+    # Add loyalty points if used
+    if invoice_doc.redeem_loyalty_points:
+        summary['loyalty'] = {
+            'points_redeemed': invoice_doc.loyalty_points,
+            'amount': invoice_doc.loyalty_amount
+        }
+    
+    # Add customer credit if used
+    if invoice_doc.redeemed_customer_credit:
+        summary['customer_credit'] = {
+            'amount': invoice_doc.redeemed_customer_credit
+        }
+    
+    return summary
+
 @frappe.whitelist()
 def submit_invoice(invoice, data):
     data = json.loads(data)
@@ -762,18 +828,43 @@ def submit_invoice(invoice, data):
             )
         }
 
-    # Update remarks with items details
-    items = []
-    for item in invoice_doc.items:
-        if item.item_name and item.rate and item.qty:
-            total = item.rate * item.qty
-            items.append(f"{item.item_name} - Rate: {item.rate}, Qty: {item.qty}, Amount: {total}")
+    # Generate structured summary
+    summary = generate_invoice_summary(invoice_doc)
     
-    # Add the grand total at the end of remarks
-    grand_total = f"\nGrand Total: {invoice_doc.grand_total}"
-    items.append(grand_total)
+    # Store structured summary in a custom field
+    invoice_doc.db_set('posa_invoice_summary', frappe.as_json(summary), update_modified=False)
     
-    invoice_doc.remarks = "\n".join(items)
+    # Create human-readable remarks from summary
+    remarks = []
+    remarks.append("Items:")
+    for item in summary['invoice_items']:
+        remarks.append(
+            f"- {item['item_name']}: {item['qty']} {item['uom']} x {item['rate']} = {item['total']}"
+            + (f" (Discount: {item['discount_percentage']}%)" if item['discount_percentage'] else "")
+        )
+    
+    remarks.append("\nTotals:")
+    remarks.append(f"Subtotal: {summary['totals']['subtotal']}")
+    if summary['totals']['discount_total']:
+        remarks.append(f"Total Discount: {summary['totals']['discount_total']}")
+    if summary['totals']['tax_total']:
+        remarks.append(f"Total Tax: {summary['totals']['tax_total']}")
+    remarks.append(f"Grand Total: {summary['totals']['grand_total']}")
+    
+    if summary.get('loyalty'):
+        remarks.append(f"\nLoyalty Points Redeemed: {summary['loyalty']['points_redeemed']}")
+        remarks.append(f"Loyalty Amount: {summary['loyalty']['amount']}")
+    
+    if summary.get('customer_credit'):
+        remarks.append(f"\nCustomer Credit Used: {summary['customer_credit']['amount']}")
+    
+    remarks.append("\nPayments:")
+    for payment in summary['payments']:
+        remarks.append(f"- {payment['mode']}: {payment['amount']}")
+    
+    invoice_doc.remarks = "\n".join(remarks)
+    
+    # Rest of the existing submit_invoice code...
     
     # creating advance payment
     if data.get("credit_change"):
