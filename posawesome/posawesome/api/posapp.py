@@ -2032,73 +2032,108 @@ def get_active_gift_coupons(customer, company):
 
 @frappe.whitelist()
 def get_customer_info(customer):
-    customer = frappe.get_doc("Customer", customer)
+    """Get customer information with offline support"""
+    try:
+        customer_doc = frappe.get_doc("Customer", customer)
 
-    res = {"loyalty_points": None, "conversion_factor": None}
-
-    res["email_id"] = customer.email_id
-    res["mobile_no"] = customer.mobile_no
-    res["image"] = customer.image
-    res["loyalty_program"] = customer.loyalty_program
-    res["customer_price_list"] = customer.default_price_list
-    res["customer_group"] = customer.customer_group
-    res["customer_type"] = customer.customer_type
-    res["territory"] = customer.territory
-    res["birthday"] = customer.posa_birthday
-    res["gender"] = customer.gender
-    res["tax_id"] = customer.tax_id
-    res["posa_discount"] = customer.posa_discount
-    res["name"] = customer.name
-    res["customer_name"] = customer.customer_name
-    res["customer_group_price_list"] = frappe.get_value(
-        "Customer Group", customer.customer_group, "default_price_list"
-    )
-
-    if customer.loyalty_program:
-        lp_details = get_loyalty_program_details_with_points(
-            customer.name,
-            customer.loyalty_program,
-            silent=True,
-            include_expired_entry=False,
+        # Get the first shipping address
+        addresses = frappe.db.sql(
+            """
+            SELECT
+                address.name as address_name,
+                address.address_line1,
+                address.address_line2,
+                address.city,
+                address.state,
+                address.country,
+                address.address_type
+            FROM `tabAddress` address
+            INNER JOIN `tabDynamic Link` link
+                ON (address.name = link.parent)
+            WHERE
+                link.link_doctype = 'Customer'
+                AND link.link_name = %s
+                AND address.disabled = 0
+                AND address.address_type = 'Shipping'
+            ORDER BY address.creation DESC
+            LIMIT 1
+            """,
+            (customer,),
+            as_dict=True
         )
-        res["loyalty_points"] = lp_details.get("loyalty_points")
-        res["conversion_factor"] = lp_details.get("conversion_factor")
-        
-    addresses = frappe.db.sql(
-        """
-        SELECT
-            address.name as address_name,
-            address.address_line1,
-            address.address_line2,
-            address.city,
-            address.state,
-            address.country,
-            address.address_type
-        FROM `tabAddress` address
-        INNER JOIN `tabDynamic Link` link
-            ON (address.name = link.parent)
-        WHERE
-            link.link_doctype = 'Customer'
-            AND link.link_name = %s
-            AND address.disabled = 0
-            AND address.address_type = 'Shipping'
-        ORDER BY address.creation DESC
-        LIMIT 1
-        """,
-        (customer.name,),
-        as_dict=True
-    )
 
-    if addresses:
-        
-        addr = addresses[0]
-        res["address_line1"] = addr.address_line1 or ""
-        res["address_line2"] = addr.address_line2 or ""
-        res["city"] = addr.city or ""
-        res["state"] = addr.state or ""
-        res["country"] = addr.country or ""
+        res = {
+            "loyalty_points": None,
+            "conversion_factor": None,
+            "email_id": customer_doc.email_id,
+            "mobile_no": customer_doc.mobile_no,
+            "image": customer_doc.image,
+            "loyalty_program": customer_doc.loyalty_program,
+            "customer_price_list": customer_doc.default_price_list,
+            "customer_group": customer_doc.customer_group,
+            "customer_type": customer_doc.customer_type,
+            "territory": customer_doc.territory,
+            "birthday": customer_doc.posa_birthday,
+            "gender": customer_doc.gender,
+            "tax_id": customer_doc.tax_id,
+            "posa_discount": customer_doc.posa_discount,
+            "name": customer_doc.name,
+            "customer_name": customer_doc.customer_name,
+            "customer_group_price_list": frappe.get_value(
+                "Customer Group", customer_doc.customer_group, "default_price_list"
+            )
+        }
 
-    return res
+        # Add address details if available
+        if addresses:
+            addr = addresses[0]
+            res.update({
+                "address_line1": addr.address_line1 or "",
+                "address_line2": addr.address_line2 or "",
+                "city": addr.city or "",
+                "state": addr.state or "",
+                "country": addr.country or ""
+            })
+
+        # Get loyalty program details
+        if customer_doc.loyalty_program:
+            try:
+                lp_details = get_loyalty_program_details_with_points(
+                    customer_doc.name,
+                    customer_doc.loyalty_program,
+                    silent=True,
+                    include_expired_entry=False,
+                )
+                res["loyalty_points"] = lp_details.get("loyalty_points")
+                res["conversion_factor"] = lp_details.get("conversion_factor")
+            except Exception as e:
+                frappe.log_error(f"Error getting loyalty points: {str(e)}", "POS Awesome")
+
+        return res
+
+    except Exception as e:
+        frappe.log_error(f"Error in get_customer_info: {str(e)}", "POS Awesome")
+        return {
+            "loyalty_points": None,
+            "conversion_factor": None,
+            "email_id": None,
+            "mobile_no": None,
+            "image": None,
+            "loyalty_program": None,
+            "customer_price_list": None,
+            "customer_group": None,
+            "customer_type": None,
+            "territory": None,
+            "birthday": None,
+            "gender": None,
+            "tax_id": None,
+            "posa_discount": None,
+            "name": customer,
+            "customer_name": None,
+            "address_line1": None,
+            "city": None,
+            "country": None
+        }
 
 
 def get_company_domain(company):

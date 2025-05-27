@@ -1747,6 +1747,26 @@ export default {
       this.back_to_invoice();
       this.is_processing_submit = false;
     },
+    async get_customer_info() {
+      try {
+        if (!this.invoice_doc.customer) return;
+        
+        const customerInfo = await getCustomerInfo(this.invoice_doc.customer);
+        
+        if (customerInfo) {
+          this.customer_info = customerInfo;
+          this.loyalty_points_available = customerInfo.loyalty_points || 0;
+          this.loyalty_points_conversion_factor = customerInfo.conversion_factor || 0;
+          this.customer_info_loaded = true;
+        }
+      } catch (error) {
+        console.error('Error fetching customer info:', error);
+        this.$message({
+          message: __('Error fetching customer information. Some features may be limited.'),
+          type: 'warning'
+        });
+      }
+    },
   },
   created() {
     document.addEventListener("keydown", this.shortPay.bind(this));

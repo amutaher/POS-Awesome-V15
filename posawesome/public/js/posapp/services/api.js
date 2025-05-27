@@ -100,6 +100,59 @@ export async function apiCall(method, args = {}, options = {}) {
   }
 }
 
+// Get customer info with offline support
+export async function getCustomerInfo(customer) {
+  try {
+    // Check if we're online
+    if (navigator.onLine) {
+      // Try online first
+      const response = await frappe.call({
+        method: 'posawesome.posawesome.api.posapp.get_customer_info',
+        args: { customer }
+      });
+
+      if (response.message) {
+        // Cache the response in IndexedDB
+        await CustomersDB.saveCustomerInfo(customer, response.message);
+        return response.message;
+      }
+    }
+
+    // If offline or online request failed, try to get from IndexedDB
+    const offlineData = await CustomersDB.getCustomerInfo(customer);
+    if (offlineData) {
+      return offlineData;
+    }
+
+    // If no data found, return default structure
+    return {
+      loyalty_points: null,
+      conversion_factor: null,
+      email_id: null,
+      mobile_no: null,
+      image: null,
+      loyalty_program: null,
+      customer_price_list: null,
+      customer_group: null,
+      customer_type: null,
+      territory: null,
+      birthday: null,
+      gender: null,
+      tax_id: null,
+      posa_discount: null,
+      name: customer,
+      customer_name: null,
+      address_line1: null,
+      city: null,
+      country: null
+    };
+
+  } catch (error) {
+    console.error('Error getting customer info:', error);
+    throw error;
+  }
+}
+
 // Sync data to IndexedDB
 async function syncToIndexedDB(method, data) {
   switch (method) {
