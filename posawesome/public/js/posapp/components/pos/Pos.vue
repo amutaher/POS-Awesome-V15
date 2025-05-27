@@ -600,19 +600,19 @@ export default {
         console.info('LoadPosProfile');
       });
       this.eventBus.on('show_payment', (data) => {
-        this.payment = true ? data === 'true' : false;
-        this.offers = false ? data === 'true' : false;
-        this.coupons = false ? data === 'true' : false;
+        this.payment = data === 'true';
+        this.offers = false;
+        this.coupons = false;
       });
       this.eventBus.on('show_offers', (data) => {
-        this.offers = true ? data === 'true' : false;
-        this.payment = false ? data === 'true' : false;
-        this.coupons = false ? data === 'true' : false;
+        this.offers = data === 'true';
+        this.payment = false;
+        this.coupons = false;
       });
       this.eventBus.on('show_coupons', (data) => {
-        this.coupons = true ? data === 'true' : false;
-        this.offers = false ? data === 'true' : false;
-        this.payment = false ? data === 'true' : false;
+        this.coupons = data === 'true';
+        this.offers = false;
+        this.payment = false;
       });
       this.eventBus.on('open_closing_dialog', () => {
         this.get_closing_data();
