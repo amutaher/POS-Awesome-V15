@@ -7,7 +7,7 @@ const db = new Dexie('PosAwesomeDB');
 db.version(1).stores({
   items: 'item_code, item_name, idx',
   customers: 'name, customer_name, email_id, mobile_no, tax_id, loyalty_program, customer_group, territory, customer_type, gender, posa_birthday, posa_discount, address_line1, city, country',
-  invoices: '++id, name, createdAt, status, sync_status, last_sync_attempt, retry_count, error_log, reference_id',
+  invoices: '++id, name, createdAt, status, sync_status, last_sync_attempt, retry_count, error_log, reference_id, customer, pos_profile, company, currency, grand_total, posting_date, total_qty, discount_amount, taxes_and_charges, payments_json, items_json, remarks',
   priceLists: 'name, currency',
   taxRules: 'name',
   pos_profile: 'name, pos_profile_name, company, warehouse'
@@ -99,7 +99,9 @@ export const CustomersDB = {
 export const InvoicesDB = {
   async addInvoice(invoice) {
     const now = new Date().toISOString();
-    return db.invoices.add({
+    
+    // Extract relevant data from invoice
+    const invoiceData = {
       ...invoice,
       createdAt: now,
       status: 'pending',
@@ -107,8 +109,26 @@ export const InvoicesDB = {
       last_sync_attempt: null,
       retry_count: 0,
       error_log: [],
-      reference_id: invoice.args?.payload?.selected_invoices?.[0]?.name || null
-    });
+      reference_id: invoice.args?.payload?.selected_invoices?.[0]?.name || null,
+      
+      // Store full invoice details
+      customer: invoice.args?.payload?.customer || null,
+      pos_profile: invoice.args?.payload?.pos_profile_name || null,
+      company: invoice.args?.payload?.company || null,
+      currency: invoice.args?.payload?.currency || null,
+      grand_total: invoice.args?.payload?.grand_total || 0,
+      posting_date: invoice.args?.payload?.posting_date || now,
+      total_qty: invoice.args?.payload?.total_qty || 0,
+      discount_amount: invoice.args?.payload?.discount_amount || 0,
+      taxes_and_charges: invoice.args?.payload?.taxes_and_charges || null,
+      
+      // Store payments and items as JSON strings
+      payments_json: JSON.stringify(invoice.args?.payload?.payments || []),
+      items_json: JSON.stringify(invoice.args?.payload?.items || []),
+      remarks: invoice.args?.payload?.remarks || ''
+    };
+
+    return db.invoices.add(invoiceData);
   },
   
   async getPendingInvoices() {
@@ -116,7 +136,15 @@ export const InvoicesDB = {
       .where('status')
       .anyOf(['pending', 'failed'])
       .and(item => item.retry_count < 5)
-      .toArray();
+      .toArray()
+      .then(invoices => {
+        // Parse JSON strings back to objects
+        return invoices.map(invoice => ({
+          ...invoice,
+          payments: JSON.parse(invoice.payments_json || '[]'),
+          items: JSON.parse(invoice.items_json || '[]')
+        }));
+      });
   },
   
   async updateInvoiceStatus(id, status, response = null, retryCount = null, error = null) {
@@ -141,13 +169,16 @@ export const InvoicesDB = {
         break;
       case 'failed':
         update.sync_status = 'failed';
-        // Add error to error log
+        // Add error to error log with more details
         if (error) {
           const errorLog = invoice.error_log || [];
           errorLog.push({
             timestamp: now,
             error: error.message || error,
-            retry_count: retryCount
+            retry_count: retryCount,
+            response_code: error.statusCode,
+            response_text: error.responseText,
+            stack_trace: error.stack
           });
           update.error_log = errorLog;
         }
@@ -160,6 +191,13 @@ export const InvoicesDB = {
     // Add server response if available
     if (response) {
       update.server_response = response;
+      
+      // Update invoice details from server response
+      if (response.name) update.name = response.name;
+      if (response.posting_date) update.posting_date = response.posting_date;
+      if (response.grand_total) update.grand_total = response.grand_total;
+      if (response.items) update.items_json = JSON.stringify(response.items);
+      if (response.payments) update.payments_json = JSON.stringify(response.payments);
     }
 
     return db.invoices.update(id, update);
