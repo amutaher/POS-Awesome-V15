@@ -437,17 +437,17 @@ export default {
       });
     },
     async check_opening_entry() {
-      if (!this.isOnline) {
-        // Use offline profile if available
-        const offlineProfile = await PosProfileDB.getCurrentProfile();
-        if (offlineProfile) {
-          this.pos_profile = offlineProfile;
-          this.eventBus.emit('register_pos_profile', offlineProfile);
-          return;
-        }
-      }
-      
       try {
+        // First try to get offline profile
+        if (!this.isOnline) {
+          const offlineProfile = await PosProfileDB.getCurrentProfile();
+          if (offlineProfile) {
+            this.pos_profile = offlineProfile;
+            this.eventBus.emit('register_pos_profile', offlineProfile);
+            return;
+          }
+        }
+
         const result = await frappe.call({
           method: 'posawesome.posawesome.api.posapp.check_opening_shift',
           args: {
@@ -462,19 +462,31 @@ export default {
           
           // Emit events only if we have valid data
           if (this.pos_profile) {
+            // Clone the profile data before saving to IndexedDB
+            const profileToSave = JSON.parse(JSON.stringify({
+              name: this.pos_profile.name,
+              pos_profile_name: this.pos_profile.name,
+              company: this.pos_profile.company,
+              currency: this.pos_profile.currency,
+              payments: this.pos_profile.payments || []
+            }));
+
+            // Save simplified profile for offline use
+            try {
+              await PosProfileDB.savePosProfile(profileToSave);
+            } catch (error) {
+              console.warn('Failed to save profile to IndexedDB:', error);
+              // Continue execution even if IndexedDB save fails
+            }
+
+            // Emit events only once
             this.eventBus.emit('register_pos_data', result.message);
             this.eventBus.emit('set_company', result.message.company);
             
             // Get offers if profile exists
             if (this.pos_profile.name) {
-              this.get_offers(this.pos_profile.name);
+              await this.get_offers(this.pos_profile.name);
             }
-            
-            // Save profile for offline use
-            PosProfileDB.savePosProfile(this.pos_profile);
-            
-            frappe.realtime.emit('pos_profile_registered');
-            console.info('LoadPosProfile');
           } else {
             this.dialog = true;
           }
