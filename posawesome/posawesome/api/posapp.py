@@ -2561,3 +2561,8 @@ def validate_dynamic_fields(doc):
                         credit["credit_origin"]
                     )
                 )
+
+@frappe.whitelist()
+def ping():
+    """Simple endpoint to verify backend connectivity"""
+    return 'pong'

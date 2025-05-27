@@ -2,30 +2,64 @@ import { InvoicesDB, ItemsDB, CustomersDB, PriceListsDB, TaxRulesDB, PosProfileD
 
 // Network status
 let isOnline = navigator.onLine;
+
+// Backend ping check with timeout
+async function checkBackendConnectivity(timeout = 3000) {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    
+    const response = await frappe.call({
+      method: 'posawesome.posawesome.api.posapp.ping',
+      args: {},
+      signal: controller.signal
+    });
+    
+    clearTimeout(timeoutId);
+    return response && response.message === 'pong';
+  } catch (error) {
+    console.log('Backend connectivity check failed:', error);
+    return false;
+  }
+}
+
+// Enhanced online status check
+async function isReallyOnline() {
+  return navigator.onLine && await checkBackendConnectivity();
+}
+
+// Show online/offline status with verification
+async function verifyAndUpdateOnlineStatus() {
+  const reallyOnline = await isReallyOnline();
+  
+  if (reallyOnline) {
+    isOnline = true;
+    frappe.show_alert({
+      message: __('Connected to server'),
+      indicator: 'green'
+    });
+    processQueue();
+  } else {
+    isOnline = false;
+    frappe.show_alert({
+      message: __('Cannot connect to server. Working offline.'),
+      indicator: 'orange'
+    });
+  }
+}
+
+// Enhanced event listeners
 window.addEventListener('online', () => {
-  isOnline = true;
-  processQueue();
-  showOnlineStatus();
+  verifyAndUpdateOnlineStatus();
 });
+
 window.addEventListener('offline', () => {
   isOnline = false;
-  showOfflineStatus();
-});
-
-// Show online/offline status
-function showOnlineStatus() {
   frappe.show_alert({
-    message: __('You are back online'),
-    indicator: 'green'
-  });
-}
-
-function showOfflineStatus() {
-  frappe.show_alert({
-    message: __('You are offline. Some features may be limited'),
+    message: __('Network disconnected. Working offline.'),
     indicator: 'orange'
   });
-}
+});
 
 // API wrapper
 export async function apiCall(method, args = {}, options = {}) {
@@ -35,7 +69,6 @@ export async function apiCall(method, args = {}, options = {}) {
   if (!args.pos_profile && method.includes('get_items')) {
     const currentProfile = await PosProfileDB.getCurrentProfile();
     if (currentProfile) {
-      // Stringify the pos_profile object
       args.pos_profile = JSON.stringify(currentProfile);
     } else {
       throw new Error('POS Profile not found. Please open POS from the desk.');
@@ -47,24 +80,24 @@ export async function apiCall(method, args = {}, options = {}) {
     args.pos_profile = JSON.stringify(args.pos_profile);
   }
   
-  if (isOnline) {
+  const reallyOnline = await isReallyOnline();
+  
+  if (reallyOnline) {
     try {
-      console.log('Making API call:', method, 'with args:', args); // Debug log
+      console.log('Making API call:', method, 'with args:', args);
       const response = await frappe.call({
         method,
         args
       });
 
-      // If this is a data sync request, store in IndexedDB
       if (syncData && response.message) {
         await syncToIndexedDB(method, response.message);
       }
 
       return response;
     } catch (error) {
-      console.error('API call failed:', error); // Debug log
+      console.error('API call failed:', error);
       if (isInvoice) {
-        // If invoice creation fails, queue it
         await InvoicesDB.addInvoice({
           method,
           args,
@@ -74,9 +107,8 @@ export async function apiCall(method, args = {}, options = {}) {
       }
       throw error;
     }
-  } else if (offlineSupport || isInvoice) { // Allow offline mode for invoices
+  } else if (offlineSupport || isInvoice) {
     if (isInvoice) {
-      // Store invoice in IndexedDB
       const invoice = {
         method,
         args,
@@ -96,7 +128,7 @@ export async function apiCall(method, args = {}, options = {}) {
     }
     return { offline: true, message: 'App is offline' };
   } else {
-    throw new Error('App is offline and this operation requires connectivity');
+    throw new Error('Cannot connect to server and this operation requires connectivity');
   }
 }
 
@@ -234,8 +266,10 @@ export async function processPosPayment(payload) {
 
 // Process offline queue with enhanced error handling and deduplication
 export async function processQueue() {
-  if (!navigator.onLine) {
-    console.log('Cannot process queue while offline');
+  const reallyOnline = await isReallyOnline();
+  
+  if (!reallyOnline) {
+    console.log('Cannot process queue - no server connectivity');
     return;
   }
 
