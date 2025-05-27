@@ -598,6 +598,52 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- Payment Dialog -->
+    <v-row justify="center">
+      <v-dialog v-model="payment_dialog" persistent max-width="600px">
+        <v-card>
+          <v-card-title>
+            <span class="text-h5">{{ __('Payment') }}</span>
+          </v-card-title>
+          <v-card-text>
+            <v-container>
+              <v-row>
+                <v-col cols="12" sm="6" md="6">
+                  <v-text-field
+                    v-model="payment_grand_total"
+                    :label="__('Amount')"
+                    readonly
+                    outlined
+                    dense
+                    :prefix="payment_currency"
+                  ></v-text-field>
+                </v-col>
+                <v-col cols="12" sm="6" md="6">
+                  <v-select
+                    v-model="selected_payment_mode"
+                    :items="payment_types"
+                    :label="__('Payment Type')"
+                    outlined
+                    dense
+                    :disabled="payment_offline_mode"
+                  ></v-select>
+                </v-col>
+              </v-row>
+            </v-container>
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer></v-spacer>
+            <v-btn color="error" @click="close_payment_dialog">
+              {{ __('Close') }}
+            </v-btn>
+            <v-btn color="success" @click="submit_payment_dialog">
+              {{ __('Submit') }}
+            </v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+    </v-row>
   </div>
 </template>
 
@@ -638,6 +684,12 @@ export default {
       sales_person: "", // Selected sales person
       addresses: [], // List of customer addresses
       is_user_editing_paid_change: false, // User interaction flag
+      payment_dialog: false,
+      payment_offline_mode: false,
+      payment_grand_total: 0,
+      payment_currency: '',
+      selected_payment_mode: 'Cash',
+      payment_types: ['Cash', 'Card', 'Multiple'],
     };
   },
   computed: {
@@ -1516,12 +1568,105 @@ export default {
     // Get change amount for display
     get_change_amount() {
       return Math.max(0, this.total_payments - this.invoice_doc.grand_total);
-    }
+    },
+    // Payment dialog methods
+    close_payment_dialog() {
+      this.payment_dialog = false;
+      this.reset_payment_form();
+    },
+    reset_payment_form() {
+      this.payment_offline_mode = false;
+      this.payment_grand_total = 0;
+      this.payment_currency = '';
+      this.selected_payment_mode = 'Cash';
+    },
+    async submit_payment_dialog() {
+      try {
+        if (this.payment_offline_mode) {
+          // Handle offline submission
+          this.eventBus.emit('payment_complete', {
+            offline: true,
+            payment: {
+              mode_of_payment: 'Cash',
+              amount: this.payment_grand_total,
+              currency: this.payment_currency
+            }
+          });
+          this.showInfo('Payment will be processed when online');
+        } else {
+          // Handle online submission
+          if (!navigator.onLine) {
+            this.showError('Cannot process payment while offline');
+            return;
+          }
+          
+          // Process normal payment
+          await this.process_payment();
+        }
+        
+        this.close_payment_dialog();
+      } catch (error) {
+        console.error('Payment submission error:', error);
+        this.showError('Failed to process payment');
+      }
+    },
+    showError(message) {
+      this.eventBus.emit('show_message', {
+        title: __(message),
+        color: 'error'
+      });
+    },
+    showInfo(message) {
+      this.eventBus.emit('show_message', {
+        title: __(message),
+        color: 'info'
+      });
+    },
   },
   // Lifecycle hook: created
   created() {
     // Register keyboard shortcut for payment
     document.addEventListener("keydown", this.shortPay.bind(this));
+
+    // Add payment dialog event handler
+    this.eventBus.on('show_payment', async (data) => {
+      try {
+        this.payment_dialog = true;
+        
+        if (typeof data === 'object' && data.offline) {
+          // Handle offline mode
+          this.payment_offline_mode = true;
+          this.invoice_doc = data.invoice_data;
+          this.payments = data.invoice_data.payments || [];
+          this.payment_grand_total = data.invoice_data.grand_total || 0;
+          this.payment_currency = data.invoice_data.currency || 'PKR';
+          this.selected_payment_mode = 'Cash'; // Force cash payment in offline mode
+        } else {
+          // Handle online mode
+          this.payment_offline_mode = false;
+          this.invoice_doc = typeof data === 'object' ? data.invoice_doc : null;
+          
+          // Only fetch additional data in online mode
+          if (navigator.onLine && this.invoice_doc) {
+            try {
+              await this.get_addresses();
+              await this.get_sales_person_names();
+              // Set payment details from invoice doc
+              this.payment_grand_total = this.invoice_doc.grand_total || 0;
+              this.payment_currency = this.invoice_doc.currency || 'PKR';
+            } catch (error) {
+              console.error('Failed to fetch additional data:', error);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error in payment dialog:', error);
+        this.eventBus.emit('show_message', {
+          title: __('Error loading payment dialog'),
+          color: 'error'
+        });
+      }
+    });
   },
   // Lifecycle hook: mounted
   mounted() {
@@ -1640,5 +1785,9 @@ export default {
 
 .v-text-field--readonly:hover {
   background-color: transparent;
+}
+
+.v-dialog {
+  background-color: white;
 }
 </style>
