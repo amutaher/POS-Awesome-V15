@@ -1060,6 +1060,8 @@ export default {
             console.error("Error submitting invoice:", r.exc);
             // Show detailed error message to help debugging
             let errorMsg = r.exc.toString();
+            
+            // Handle specific validation errors
             if (errorMsg.includes("Amount must be negative")) {
               vm.eventBus.emit("show_message", {
                 title: __("Fixing payment amounts for return invoice..."),
@@ -1079,7 +1081,17 @@ export default {
               setTimeout(() => {
                 vm.submit_invoice(print);
               }, 500);
-            } else {
+            } 
+            // Handle dynamic field validation errors
+            else if (errorMsg.includes("not allowed in this POS Profile")) {
+              vm.eventBus.emit("show_message", {
+                title: __(errorMsg),
+                color: "error",
+              });
+              // Emit event to update UI restrictions
+              vm.eventBus.emit("update_pos_profile_restrictions");
+            }
+            else {
               vm.eventBus.emit("show_message", {
                 title: __("Error submitting invoice: ") + errorMsg,
                 color: "error",

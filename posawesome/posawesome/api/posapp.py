@@ -611,7 +611,24 @@ def submit_invoice(invoice, data):
     data = json.loads(data)
     invoice = json.loads(invoice)
     invoice_doc = frappe.get_doc("Sales Invoice", invoice.get("name"))
+    
+    # Store original values for validation
+    original_values = {
+        'items': [{
+            'item_code': item.item_code,
+            'rate': item.rate,
+            'price_list_rate': item.price_list_rate,
+            'discount_percentage': item.discount_percentage,
+            'discount_amount': item.discount_amount,
+            'qty': item.qty
+        } for item in invoice_doc.items]
+    }
+    
+    # Update document with new values
     invoice_doc.update(invoice)
+    
+    # Run validations
+    invoice_doc.validate()
     if invoice.get("posa_delivery_date"):
         invoice_doc.update_stock = 0
     mop_cash_list = [
@@ -2262,3 +2279,193 @@ def get_app_info() -> Dict[str, List[Dict[str, str]]]:
     ]
 
     return {"apps": apps_info}
+
+
+def validate(doc, method):
+    if doc.is_pos and doc.pos_profile:
+        validate_dynamic_fields(doc)
+        validate_shift(doc)
+    set_patient(doc)
+    auto_set_delivery_charges(doc)
+    calc_delivery_charges(doc)
+
+
+def before_submit(doc, method):
+    add_loyalty_point(doc)
+    create_sales_order(doc)
+    update_coupon(doc, "used")
+
+
+def before_cancel(doc, method):
+    update_coupon(doc, "cancelled")
+
+
+def add_loyalty_point(invoice_doc):
+    for offer in invoice_doc.posa_offers:
+        if offer.offer == "Loyalty Point":
+            original_offer = frappe.get_doc("POS Offer", offer.offer_name)
+            if original_offer.loyalty_points > 0:
+                loyalty_program = frappe.get_value(
+                    "Customer", invoice_doc.customer, "loyalty_program"
+                )
+                if not loyalty_program:
+                    loyalty_program = original_offer.loyalty_program
+                doc = frappe.get_doc(
+                    {
+                        "doctype": "Loyalty Point Entry",
+                        "loyalty_program": loyalty_program,
+                        "loyalty_program_tier": original_offer.name,
+                        "customer": invoice_doc.customer,
+                        "invoice_type": "Sales Invoice",
+                        "invoice": invoice_doc.name,
+                        "loyalty_points": original_offer.loyalty_points,
+                        "expiry_date": add_days(invoice_doc.posting_date, 10000),
+                        "posting_date": invoice_doc.posting_date,
+                        "company": invoice_doc.company,
+                    }
+                )
+                doc.insert(ignore_permissions=True)
+
+
+def create_sales_order(doc):
+    if (
+        doc.posa_pos_opening_shift
+        and doc.pos_profile
+        and doc.is_pos
+        and doc.posa_delivery_date
+        and not doc.update_stock
+        and frappe.get_value("POS Profile", doc.pos_profile, "posa_allow_sales_order")
+    ):
+        sales_order_doc = make_sales_order(doc.name)
+        if sales_order_doc:
+            sales_order_doc.posa_notes = doc.posa_notes
+            sales_order_doc.flags.ignore_permissions = True
+            sales_order_doc.flags.ignore_account_permission = True
+            sales_order_doc.save()
+            sales_order_doc.submit()
+            url = frappe.utils.get_url_to_form(
+                sales_order_doc.doctype, sales_order_doc.name
+            )
+            msgprint = "Sales Order Created at <a href='{0}'>{1}</a>".format(
+                url, sales_order_doc.name
+            )
+            frappe.msgprint(
+                _(msgprint), title="Sales Order Created", indicator="green", alert=True
+            )
+            i = 0
+            for item in sales_order_doc.items:
+                doc.items[i].sales_order = sales_order_doc.name
+                doc.items[i].so_detail = item.name
+                i += 1
+
+
+def make_sales_order(source_name, target_doc=None, ignore_permissions=True):
+    def set_missing_values(source, target):
+        target.ignore_pricing_rule = 1
+        target.flags.ignore_permissions = ignore_permissions
+        target.run_method("set_missing_values")
+        target.run_method("calculate_taxes_and_totals")
+
+    def update_item(obj, target, source_parent):
+        target.stock_qty = flt(obj.qty) * flt(obj.conversion_factor)
+        target.delivery_date = (
+            obj.posa_delivery_date or source_parent.posa_delivery_date
+        )
+
+    doclist = get_mapped_doc(
+        "Sales Invoice",
+        source_name,
+        {
+            "Sales Invoice": {
+                "doctype": "Sales Order",
+            },
+            "Sales Invoice Item": {
+                "doctype": "Sales Order Item",
+                "field_map": {
+                    "cost_center": "cost_center",
+                    "Warehouse": "warehouse",
+                    "delivery_date": "posa_delivery_date",
+                    "posa_notes": "posa_notes",
+                },
+                "postprocess": update_item,
+            },
+            "Sales Taxes and Charges": {
+                "doctype": "Sales Taxes and Charges",
+                "add_if_empty": True,
+            },
+            "Sales Team": {"doctype": "Sales Team", "add_if_empty": True},
+            "Payment Schedule": {"doctype": "Payment Schedule", "add_if_empty": True},
+        },
+        target_doc,
+        set_missing_values,
+        ignore_permissions=ignore_permissions,
+    )
+
+    return doclist
+
+
+def validate_shift(doc):
+    if doc.posa_pos_opening_shift and doc.pos_profile and doc.is_pos:
+        # check if shift is open
+        shift = frappe.get_cached_doc("POS Opening Shift", doc.posa_pos_opening_shift)
+        if shift.status != "Open":
+            frappe.throw(_("POS Shift {0} is not open").format(shift.name))
+        # check if shift is for the same profile
+        if shift.pos_profile != doc.pos_profile:
+            frappe.throw(
+                _("POS Opening Shift {0} is not for the same POS Profile").format(
+                    shift.name
+                )
+            )
+        # check if shift is for the same company
+        if shift.company != doc.company:
+            frappe.throw(
+                _("POS Opening Shift {0} is not for the same company").format(
+                    shift.name
+                )
+            )
+
+
+def validate_dynamic_fields(doc):
+    """Validate dynamic field restrictions in backend"""
+    pos_profile = frappe.get_doc("POS Profile", doc.pos_profile)
+    
+    # Validate if editing rate is allowed
+    if not pos_profile.posa_allow_rate and any(item.rate != item.price_list_rate for item in doc.items):
+        frappe.throw(_("Editing rate is not allowed in this POS Profile"))
+    
+    # Validate if editing discount is allowed
+    if not pos_profile.posa_allow_discount and any(item.discount_percentage > 0 or item.discount_amount > 0 for item in doc.items):
+        frappe.throw(_("Editing discount is not allowed in this POS Profile"))
+        
+    # Validate if editing item is allowed after adding
+    if not pos_profile.posa_allow_item_edit and doc.posa_is_printed:
+        original_doc = frappe.get_doc("Sales Invoice", doc.name) if doc.name else None
+        if original_doc:
+            original_items = {item.item_code: item.qty for item in original_doc.items}
+            for item in doc.items:
+                if item.item_code in original_items and item.qty != original_items[item.item_code]:
+                    frappe.throw(_("Editing item quantity after adding is not allowed in this POS Profile"))
+                    
+    # Validate maximum discount percentage
+    if pos_profile.posa_max_discount_percentage:
+        max_discount = float(pos_profile.posa_max_discount_percentage)
+        for item in doc.items:
+            if item.discount_percentage > max_discount:
+                frappe.throw(_("Discount percentage cannot be more than {0}%").format(max_discount))
+                
+    # Validate if return is allowed
+    if doc.is_return and not pos_profile.posa_allow_return:
+        frappe.throw(_("Returns are not allowed in this POS Profile"))
+        
+    # Validate if sales order creation is allowed
+    if doc.posa_is_sales_order and not pos_profile.posa_allow_sales_order:
+        frappe.throw(_("Sales Order creation is not allowed in this POS Profile"))
+        
+    # Validate if customer credit is allowed
+    if doc.redeemed_customer_credit and not pos_profile.posa_allow_credit_sale:
+        frappe.throw(_("Customer credit is not allowed in this POS Profile"))
+        
+    # Validate if delivery charges are allowed
+    if doc.posa_delivery_charges and not pos_profile.posa_allow_delivery_charges:
+        frappe.throw(_("Delivery charges are not allowed in this POS Profile"))

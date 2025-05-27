@@ -1,6 +1,8 @@
 doc_events = {
     "Sales Invoice": {
-        "validate": "posawesome.posawesome.api.invoice.validate",
+        "validate": "posawesome.posawesome.api.posapp.validate",
+        "before_submit": "posawesome.posawesome.api.posapp.before_submit",
+        "before_cancel": "posawesome.posawesome.api.posapp.before_cancel",
     },
     "Customer": {
         "validate": "posawesome.posawesome.api.posapp.set_customer_info",
