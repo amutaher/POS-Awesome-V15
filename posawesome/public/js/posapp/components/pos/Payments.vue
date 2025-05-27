@@ -947,14 +947,14 @@ export default {
       this.submit_retry_count = 0;
       
       // Show processing feedback to user
-      this.eventBus.emit("show_message", {
+            this.eventBus.emit("show_message", {
         title: __("Processing payment..."),
         color: "info",
       });
       
       // Debounce the submission to prevent accidental double-clicks
       setTimeout(() => {
-        this.submit_invoice(print);
+      this.submit_invoice(print);
       }, 300);
     },
     submit_invoice(print) {
@@ -1027,15 +1027,15 @@ export default {
 
       // Online submission with enhanced error handling
       const submitWithRetry = () => {
-        frappe.call({
-          method: "posawesome.posawesome.api.posapp.submit_invoice",
-          args: {
-            data: data,
-            invoice: this.invoice_doc,
-          },
-          callback: function (r) {
-            if (r.exc) {
-              console.error("Error submitting invoice:", r.exc);
+      frappe.call({
+        method: "posawesome.posawesome.api.posapp.submit_invoice",
+        args: {
+          data: data,
+          invoice: this.invoice_doc,
+        },
+        callback: function (r) {
+          if (r.exc) {
+            console.error("Error submitting invoice:", r.exc);
               
               // Handle error with enhanced error reporting
               const { canRetry, userMessage } = vm.handleSubmissionError(r.exc, data, print);
@@ -1046,29 +1046,29 @@ export default {
                 return;
               }
               
-              return;
-            }
+            return;
+          }
             
-            if (!r.message) {
+          if (!r.message) {
               vm.handleSubmissionError(
                 new Error("No response from server"),
                 data,
                 print
               );
-              return;
-            }
+            return;
+          }
             
             // Handle successful submission
-            if (print) {
-              vm.load_print_page();
-            }
+          if (print) {
+            vm.load_print_page();
+          }
             
             vm.handleSuccessfulSubmission(r.message);
             
-            vm.eventBus.emit("show_message", {
-              title: __("Invoice {0} is Submitted", [r.message.name]),
-              color: "success",
-            });
+          vm.eventBus.emit("show_message", {
+            title: __("Invoice {0} is Submitted", [r.message.name]),
+            color: "success",
+          });
           }
         });
       };

@@ -242,7 +242,7 @@
 </template>
 
 <script>
-
+import { processPosPayment } from '../../services/api';
 import format from "../../format";
 import Customer from "../pos/Customer.vue";
 import UpdateCustomer from "../pos/UpdateCustomer.vue";
@@ -652,8 +652,6 @@ export default {
       payload.total_selected_mpesa_payments = flt(
         this.total_selected_mpesa_payments
       );
-
-      import { processPosPayment } from '../../services/api';
       
       processPosPayment(payload)
         .then((r) => {
@@ -737,8 +735,6 @@ export default {
         this.total_selected_mpesa_payments
       );
 
-      import { processPosPayment } from '../../services/api';
-      
       processPosPayment(payload)
         .then((r) => {
           vm.isSubmitting = false;
