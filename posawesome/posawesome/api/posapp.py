@@ -810,6 +810,15 @@ def submit_invoice(invoice, data):
     data = json.loads(data)
     invoice = json.loads(invoice)
     
+    # Check if invoice already exists and is submitted
+    if invoice.get("name"):
+        existing_invoice = frappe.get_doc("Sales Invoice", invoice.get("name"))
+        if existing_invoice.docstatus == 1:
+            frappe.throw(
+                _("Invoice {0} is already submitted").format(invoice.get("name")),
+                title=_("Invalid Action")
+            )
+    
     # Sanitize the invoice data
     sanitized_invoice = sanitize_invoice_data(invoice)
     invoice_doc = frappe.get_doc(sanitized_invoice)
