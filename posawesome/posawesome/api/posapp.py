@@ -610,7 +610,10 @@ def update_invoice(data):
 def submit_invoice(invoice, data):
     data = json.loads(data)
     invoice = json.loads(invoice)
-    invoice_doc = frappe.get_doc("Sales Invoice", invoice.get("name"))
+    invoice_doc = frappe.get_doc(invoice)
+    
+    # Validate all dynamic fields including loyalty and credit redemptions
+    validate_dynamic_fields(invoice_doc)
     
     # Store original values for validation
     original_values = {
@@ -657,7 +660,7 @@ def submit_invoice(invoice, data):
     items.append(grand_total)
     
     invoice_doc.remarks = "\n".join(items)
-
+    
     # creating advance payment
     if data.get("credit_change"):
         advance_payment_entry = frappe.get_doc(
@@ -889,6 +892,9 @@ def submit_in_background_job(kwargs):
     payments = kwargs.get("payments")
 
     invoice_doc = frappe.get_doc("Sales Invoice", invoice)
+    
+    # Validate all dynamic fields including loyalty and credit redemptions
+    validate_dynamic_fields(invoice_doc)
     
     # Update remarks with items details for background job
     items = []
@@ -2469,3 +2475,54 @@ def validate_dynamic_fields(doc):
     # Validate if delivery charges are allowed
     if doc.posa_delivery_charges and not pos_profile.posa_allow_delivery_charges:
         frappe.throw(_("Delivery charges are not allowed in this POS Profile"))
+    
+    # Validate loyalty points redemption
+    if doc.redeem_loyalty_points:
+        customer_details = get_customer_info(doc.customer)
+        available_points = customer_details.get("loyalty_points", 0)
+        conversion_factor = customer_details.get("conversion_factor", 0)
+        
+        if not available_points or not conversion_factor:
+            frappe.throw(_("No valid loyalty points found for customer"))
+            
+        max_redeemable_amount = flt(available_points * conversion_factor)
+        if flt(doc.loyalty_amount) > max_redeemable_amount:
+            frappe.throw(
+                _("Cannot redeem more than {0} loyalty points ({1})").format(
+                    available_points,
+                    frappe.format_value(max_redeemable_amount, {"fieldtype": "Currency"})
+                )
+            )
+    
+    # Validate customer credit redemption
+    if doc.redeemed_customer_credit:
+        if not pos_profile.posa_allow_credit_sale:
+            frappe.throw(_("Customer credit is not allowed in this POS Profile"))
+            
+        available_credits = get_available_credit(doc.customer, doc.company)
+        total_available_credit = sum(credit.get("total_credit", 0) for credit in available_credits)
+        
+        if flt(doc.redeemed_customer_credit) > total_available_credit:
+            frappe.throw(
+                _("Cannot redeem more than available credit amount of {0}").format(
+                    frappe.format_value(total_available_credit, {"fieldtype": "Currency"})
+                )
+            )
+            
+        # Validate individual credit redemptions
+        credit_dict = doc.get("customer_credit_dict", [])
+        for credit in credit_dict:
+            matching_credit = next(
+                (ac for ac in available_credits if ac["credit_origin"] == credit["credit_origin"]),
+                None
+            )
+            if not matching_credit:
+                frappe.throw(_("Invalid credit reference: {0}").format(credit["credit_origin"]))
+                
+            if flt(credit["credit_to_redeem"]) > flt(matching_credit["total_credit"]):
+                frappe.throw(
+                    _("Cannot redeem more than available credit of {0} for {1}").format(
+                        frappe.format_value(matching_credit["total_credit"], {"fieldtype": "Currency"}),
+                        credit["credit_origin"]
+                    )
+                )
