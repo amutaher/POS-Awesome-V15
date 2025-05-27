@@ -606,11 +606,128 @@ def update_invoice(data):
     return response
 
 
+def sanitize_invoice_data(invoice_data):
+    """Sanitize and whitelist invoice fields"""
+    # Define whitelisted fields that can be updated from frontend
+    whitelisted_fields = {
+        # Basic invoice fields
+        'customer': str,
+        'posting_date': str,
+        'due_date': str,
+        'currency': str,
+        'conversion_rate': float,
+        'selling_price_list': str,
+        'price_list_currency': str,
+        'plc_conversion_rate': float,
+        'ignore_pricing_rule': int,
+        'update_stock': int,
+        'total': float,
+        'grand_total': float,
+        'base_grand_total': float,
+        'rounding_adjustment': float,
+        'rounded_total': float,
+        'base_rounded_total': float,
+        'in_words': str,
+        'base_in_words': str,
+        'redeem_loyalty_points': int,
+        'loyalty_points': int,
+        'loyalty_amount': float,
+        'pos_profile': str,
+        'remarks': str,
+        
+        # POS specific fields
+        'is_pos': int,
+        'redeemed_customer_credit': float,
+        'credit_change': float,
+        'total_change': float,
+        'paid_change': float,
+        'posa_delivery_date': str,
+        'posa_notes': str,
+        'posa_pos_opening_shift': str,
+        'posa_is_printed': int,
+    }
+    
+    # Define whitelisted fields for child tables
+    whitelisted_child_fields = {
+        'items': {
+            'item_code': str,
+            'item_name': str,
+            'description': str,
+            'qty': float,
+            'stock_qty': float,
+            'rate': float,
+            'amount': float,
+            'base_rate': float,
+            'base_amount': float,
+            'price_list_rate': float,
+            'discount_percentage': float,
+            'discount_amount': float,
+            'stock_uom': str,
+            'uom': str,
+            'conversion_factor': float,
+            'warehouse': str,
+            'batch_no': str,
+            'serial_no': str,
+            'sales_order': str,
+            'so_detail': str,
+            'actual_batch_qty': float,
+            'actual_qty': float,
+        },
+        'payments': {
+            'mode_of_payment': str,
+            'amount': float,
+            'base_amount': float,
+            'account': str,
+            'type': str,
+            'default': int,
+        },
+        'taxes': {
+            'charge_type': str,
+            'account_head': str,
+            'description': str,
+            'rate': float,
+            'tax_amount': float,
+            'total': float,
+            'base_tax_amount': float,
+            'base_total': float,
+        }
+    }
+    
+    sanitized = {}
+    
+    # Sanitize main fields
+    for field, field_type in whitelisted_fields.items():
+        if field in invoice_data:
+            try:
+                sanitized[field] = field_type(invoice_data[field]) if invoice_data[field] is not None else None
+            except (ValueError, TypeError):
+                frappe.throw(_("Invalid value for field {0}").format(field))
+    
+    # Sanitize child tables
+    for table, fields in whitelisted_child_fields.items():
+        if table in invoice_data:
+            sanitized[table] = []
+            for row in invoice_data[table]:
+                sanitized_row = {}
+                for field, field_type in fields.items():
+                    if field in row:
+                        try:
+                            sanitized_row[field] = field_type(row[field]) if row[field] is not None else None
+                        except (ValueError, TypeError):
+                            frappe.throw(_("Invalid value for field {0} in {1}").format(field, table))
+                if sanitized_row:
+                    sanitized[table].append(sanitized_row)
+    
+    return sanitized
+
 @frappe.whitelist()
 def submit_invoice(invoice, data):
     data = json.loads(data)
     invoice = json.loads(invoice)
-    invoice_doc = frappe.get_doc(invoice)
+    
+    # Sanitize the invoice data
+    sanitized_invoice = sanitize_invoice_data(invoice)
+    invoice_doc = frappe.get_doc(sanitized_invoice)
     
     # Validate all dynamic fields including loyalty and credit redemptions
     validate_dynamic_fields(invoice_doc)
@@ -626,9 +743,6 @@ def submit_invoice(invoice, data):
             'qty': item.qty
         } for item in invoice_doc.items]
     }
-    
-    # Update document with new values
-    invoice_doc.update(invoice)
     
     # Run validations
     invoice_doc.validate()
@@ -707,8 +821,6 @@ def submit_invoice(invoice, data):
 
     payments = invoice_doc.payments
 
-    # if frappe.get_value("POS Profile", invoice_doc.pos_profile, "posa_auto_set_batch"):
-    #     set_batch_nos(invoice_doc, "warehouse", throw=True)
     set_batch_nos_for_bundels(invoice_doc, "warehouse", throw=True)
 
     invoice_doc.flags.ignore_permissions = True
