@@ -478,6 +478,7 @@ export default {
       invoice_posting_date: false, // Posting date dialog
       posting_date: frappe.datetime.nowdate(), // Invoice posting date
       posting_date_menu: false, // Posting date menu visibility
+      locally_canceled: false, // Track if invoice is canceled locally
       items_headers: [
         // Table headers for items
         {
@@ -866,6 +867,8 @@ export default {
       this.selected_delivery_charge = "";
       // Reset posting date to today
       this.posting_date = frappe.datetime.nowdate();
+      // Reset locally canceled flag
+      this.locally_canceled = false;
 
       // Always reset to default customer after invoice
       this.customer = this.pos_profile.customer;
@@ -900,30 +903,74 @@ export default {
 
     // Cancel the current invoice, optionally delete from backend
     async cancel_invoice() {
-      const doc = this.get_invoice_doc();
-      this.invoiceType = this.pos_profile.posa_default_sales_order
-        ? "Order"
-        : "Invoice";
-      this.invoiceTypes = ["Invoice", "Order"];
-      this.posting_date = frappe.datetime.nowdate();
-      var vm = this;
-      if (doc.name && this.pos_profile.posa_allow_delete) {
-        await frappe.call({
-          method: "posawesome.posawesome.api.posapp.delete_invoice",
-          args: { invoice: doc.name },
-          async: true,
-          callback: function (r) {
-            if (r.message) {
-              vm.eventBus.emit("show_message", {
-                text: r.message,
+      try {
+        const doc = this.get_invoice_doc();
+        this.invoiceType = this.pos_profile.posa_default_sales_order
+          ? "Order"
+          : "Invoice";
+        this.invoiceTypes = ["Invoice", "Order"];
+        this.posting_date = frappe.datetime.nowdate();
+        
+        // Mark as locally canceled
+        this.locally_canceled = true;
+        doc.locally_canceled = true;
+        
+        // Check if we're online and have permission to delete
+        if (navigator.onLine && doc.name && this.pos_profile.posa_allow_delete) {
+          try {
+            const result = await frappe.call({
+              method: "posawesome.posawesome.api.posapp.delete_invoice",
+              args: { invoice: doc.name },
+              async: true
+            });
+            
+            if (result.message) {
+              this.eventBus.emit("show_message", {
+                text: result.message,
                 color: "warning",
               });
             }
-          },
+          } catch (error) {
+            console.error('Failed to delete invoice:', error);
+            // Store for later sync
+            const pendingCancellations = JSON.parse(localStorage.getItem('pending_cancellations') || '[]');
+            pendingCancellations.push({
+              invoice_name: doc.name,
+              timestamp: new Date().toISOString()
+            });
+            localStorage.setItem('pending_cancellations', JSON.stringify(pendingCancellations));
+            
+            this.eventBus.emit("show_message", {
+              text: "Invoice marked for cancellation when online",
+              color: "info",
+            });
+          }
+        } else if (!navigator.onLine) {
+          // Store for later sync
+          const pendingCancellations = JSON.parse(localStorage.getItem('pending_cancellations') || '[]');
+          if (doc.name) {
+            pendingCancellations.push({
+              invoice_name: doc.name,
+              timestamp: new Date().toISOString()
+            });
+            localStorage.setItem('pending_cancellations', JSON.stringify(pendingCancellations));
+          }
+          
+          this.eventBus.emit("show_message", {
+            text: "Invoice marked for cancellation when online",
+            color: "info",
+          });
+        }
+        
+        this.clear_invoice();
+        this.cancel_dialog = false;
+      } catch (error) {
+        console.error('Cancel invoice error:', error);
+        this.eventBus.emit("show_message", {
+          text: "Failed to cancel invoice: " + error.message,
+          color: "error",
         });
       }
-      this.clear_invoice()
-      this.cancel_dialog = false;
     },
 
     // Load an invoice (or return invoice) from data, set all fields accordingly
@@ -1212,8 +1259,9 @@ export default {
       doc.plc_conversion_rate = doc.conversion_rate;
       doc.ignore_default_fields = 1;  // Add this to prevent default field updates
       
-      // Add custom fields to track offer rates
+      // Add custom fields to track offer rates and cancellation status
       doc.posa_is_offer_applied = this.posa_offers.length > 0 ? 1 : 0;
+      doc.locally_canceled = this.locally_canceled;
       
       // Calculate base amounts using the exchange rate
       if (this.selected_currency !== this.pos_profile.currency) {
