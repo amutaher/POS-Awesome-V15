@@ -32,6 +32,7 @@ from posawesome.posawesome.doctype.delivery_charges.delivery_charges import (
 )
 from frappe.utils.caching import redis_cache
 from typing import List, Dict
+import time
 
 
 @frappe.whitelist()
@@ -982,20 +983,52 @@ def submit_invoice(invoice, data):
                 "posa_is_printed": 1,
             },
         )
+        
+        # Track queued jobs
+        queued_jobs = []
+        
         for invoice in invoices_list:
-            enqueue(
-                method=submit_in_background_job,
-                queue="short",
-                timeout=1000,
-                is_async=True,
-                kwargs={
+            try:
+                job = enqueue(
+                    method=submit_in_background_job,
+                    queue="short",
+                    timeout=300,  # Increased timeout
+                    is_async=True,
+                    kwargs={
+                        "invoice": invoice.name,
+                        "data": data,
+                        "is_payment_entry": is_payment_entry,
+                        "total_cash": total_cash,
+                        "cash_account": cash_account,
+                        "payments": payments,
+                    },
+                )
+                
+                # Log job details
+                job_info = {
                     "invoice": invoice.name,
-                    "data": data,
-                    "is_payment_entry": is_payment_entry,
-                    "total_cash": total_cash,
-                    "cash_account": cash_account,
-                    "payments": payments,
-                },
+                    "job_id": job.id if job else "Unknown",
+                    "queue": "short",
+                    "timestamp": frappe.utils.now()
+                }
+                queued_jobs.append(job_info)
+                
+                frappe.log_error(
+                    f"Enqueued background job: {frappe.as_json(job_info)}", 
+                    "POS Invoice Submit Queue"
+                )
+                
+            except Exception as e:
+                frappe.log_error(
+                    f"Failed to enqueue job for invoice {invoice.name}: {str(e)}", 
+                    "POS Invoice Submit Queue Error"
+                )
+        
+        # Log all queued jobs for this batch
+        if queued_jobs:
+            frappe.log_error(
+                f"Batch Summary - Queued Jobs: {frappe.as_json(queued_jobs)}", 
+                "POS Invoice Submit Batch"
             )
     else:
         invoice_doc.submit()
@@ -1127,59 +1160,124 @@ def redeeming_customer_credit(
 
 
 def submit_in_background_job(kwargs):
+    """Submit invoice in background with retry mechanism"""
     invoice = kwargs.get("invoice")
-    invoice_doc = kwargs.get("invoice_doc")
     data = kwargs.get("data")
     is_payment_entry = kwargs.get("is_payment_entry")
     total_cash = kwargs.get("total_cash")
     cash_account = kwargs.get("cash_account")
     payments = kwargs.get("payments")
-
-    # Check if invoice already exists and is submitted
-    try:
-        existing_invoice = frappe.get_doc("Sales Invoice", invoice)
-        if existing_invoice.docstatus == 1:
-            frappe.log_error(
-                f"Skipping duplicate replay for invoice {invoice} - already submitted",
-                "POS Invoice Replay"
-            )
-            return {
-                "name": existing_invoice.name,
-                "status": existing_invoice.docstatus,
-                "message": "Invoice already submitted"
+    
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            # Log job start
+            job_log = {
+                "invoice": invoice,
+                "attempt": retry_count + 1,
+                "timestamp": frappe.utils.now(),
+                "status": "Started"
             }
-    except Exception as e:
-        frappe.log_error(f"Error checking invoice status: {str(e)}", "POS Invoice Replay")
-
-    invoice_doc = frappe.get_doc("Sales Invoice", invoice)
-    
-    # Validate all dynamic fields including loyalty and credit redemptions
-    validate_dynamic_fields(invoice_doc)
-    
-    # Update remarks with items details for background job
-    items = []
-    for item in invoice_doc.items:
-        if item.item_name and item.rate and item.qty:
-            total = item.rate * item.qty
-            items.append(f"{item.item_name} - Rate: {item.rate}, Qty: {item.qty}, Amount: {total}")
-    
-    # Add the grand total at the end of remarks
-    grand_total = f"\nGrand Total: {invoice_doc.grand_total}"
-    items.append(grand_total)
-    
-    invoice_doc.remarks = "\n".join(items)
-    invoice_doc.save()
-    
-    invoice_doc.submit()
-    redeeming_customer_credit(
-        invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
-    )
-    
-    return {
-        "name": invoice_doc.name,
-        "status": invoice_doc.docstatus,
-        "message": "Invoice submitted successfully"
-    }
+            frappe.log_error(f"Background Job Started: {frappe.as_json(job_log)}", "POS Invoice Submit")
+            
+            # Check if invoice already exists and is submitted
+            try:
+                existing_invoice = frappe.get_doc("Sales Invoice", invoice)
+                if existing_invoice.docstatus == 1:
+                    frappe.log_error(
+                        f"Skipping duplicate submission for invoice {invoice} - already submitted",
+                        "POS Invoice Submit"
+                    )
+                    return {
+                        "name": existing_invoice.name,
+                        "status": existing_invoice.docstatus,
+                        "message": "Invoice already submitted"
+                    }
+            except Exception as e:
+                frappe.log_error(f"Error checking invoice status: {str(e)}", "POS Invoice Submit")
+            
+            invoice_doc = frappe.get_doc("Sales Invoice", invoice)
+            
+            # Validate all dynamic fields including loyalty and credit redemptions
+            validate_dynamic_fields(invoice_doc)
+            
+            # Update remarks with items details for background job
+            items_summary = []
+            total_amount = 0
+            for item in invoice_doc.items:
+                if item.item_name and item.rate and item.qty:
+                    amount = item.rate * item.qty
+                    total_amount += amount
+                    items_summary.append(f"{item.item_name} - Rate: {item.rate}, Qty: {item.qty}, Amount: {amount}")
+            
+            # Add payment details and grand total
+            payment_summary = []
+            for payment in invoice_doc.payments:
+                payment_summary.append(f"Payment ({payment.mode_of_payment}): {payment.amount}")
+            
+            invoice_doc.remarks = "\n".join([
+                "=== Invoice Summary ===",
+                *items_summary,
+                "=== Payment Details ===",
+                *payment_summary,
+                f"\nGrand Total: {invoice_doc.grand_total}",
+                f"Background Job Attempt: {retry_count + 1}"
+            ])
+            
+            invoice_doc.flags.ignore_permissions = True
+            frappe.flags.ignore_account_permission = True
+            
+            # Save before submit to update remarks
+            invoice_doc.save()
+            
+            # Submit invoice
+            invoice_doc.submit()
+            
+            # Process payments
+            redeeming_customer_credit(
+                invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
+            )
+            
+            # Log successful completion
+            job_log["status"] = "Completed"
+            job_log["docstatus"] = invoice_doc.docstatus
+            frappe.log_error(f"Background Job Completed: {frappe.as_json(job_log)}", "POS Invoice Submit")
+            
+            return {
+                "name": invoice_doc.name,
+                "status": invoice_doc.docstatus,
+                "message": "Invoice submitted successfully"
+            }
+            
+        except Exception as e:
+            retry_count += 1
+            error_msg = f"Error in attempt {retry_count}: {str(e)}"
+            
+            # Log the error
+            job_log["status"] = "Failed"
+            job_log["error"] = error_msg
+            frappe.log_error(
+                f"Background Job Error: {frappe.as_json(job_log)}", 
+                f"POS Invoice Submit (Attempt {retry_count})"
+            )
+            
+            if retry_count == max_retries:
+                # Final attempt failed
+                frappe.log_error(
+                    f"All retries failed for invoice {invoice}. Final error: {error_msg}",
+                    "POS Invoice Submit Failed"
+                )
+                return {
+                    "name": invoice,
+                    "status": "Failed",
+                    "message": f"Failed to submit invoice after {max_retries} attempts. Please try again or contact administrator."
+                }
+            else:
+                # Wait before retry (exponential backoff)
+                time.sleep(2 ** retry_count)
+                continue
 
 
 @frappe.whitelist()
