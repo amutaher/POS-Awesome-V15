@@ -1962,7 +1962,31 @@ export default {
 
     // Close payment dialog
     close_payments() {
-      this.eventBus.emit("show_payment", "false");
+      try {
+        // Validate invoice state
+        if (!this.invoice_doc) {
+          console.warn('No active invoice when closing payments');
+          this.eventBus.emit('show_message', {
+            title: __('No active invoice'),
+            color: 'warning'
+          });
+          return;
+        }
+
+        // Reset payment related state
+        this.payment_dialog = false;
+        this.selected_payment_mode = null;
+        
+        // Emit event to close payment dialog
+        this.eventBus.emit('show_payment', false);
+        
+      } catch (error) {
+        console.error('Error closing payments:', error);
+        this.eventBus.emit('show_message', {
+          title: __('Error closing payment dialog: ') + error.message,
+          color: 'error'
+        });
+      }
     },
 
     async update_items_details() {

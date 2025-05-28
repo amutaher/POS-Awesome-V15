@@ -54,6 +54,7 @@ export default {
     singleSelect: true,
     selected: [],
     dialog_data: {},
+    invoice_doc: null,
     headers: [
       {
         title: __('Customer'),
@@ -203,45 +204,73 @@ export default {
       });
     },
 
-    submit_dialog() {
-      if (this.selected.length > 0) {
-        // Validate selected invoice data
-        const invoice = this.selected[0];
+    initializeInvoiceData(invoice) {
+      try {
         if (!invoice) {
-          this.showError('Invalid invoice data');
-          return;
+          throw new Error('Invalid invoice data');
         }
 
-        // Initialize required properties if not present
-        if (!invoice.payments) {
-          invoice.payments = [];
-        }
-
-        if (!invoice.items) {
-          invoice.items = [];
-        }
-
-        // Ensure other required properties exist
+        // Initialize required properties
+        invoice.payments = Array.isArray(invoice.payments) ? invoice.payments : [];
+        invoice.items = Array.isArray(invoice.items) ? invoice.items : [];
         invoice.is_return = invoice.is_return || false;
         invoice.grand_total = invoice.grand_total || 0;
         invoice.rounded_total = invoice.rounded_total || invoice.grand_total;
+        invoice.total_taxes_and_charges = invoice.total_taxes_and_charges || 0;
+        invoice.discount_amount = invoice.discount_amount || 0;
+        invoice.additional_discount_percentage = invoice.additional_discount_percentage || 0;
 
-        // Load the invoice
-        this.eventBus.emit('load_invoice', invoice);
-        this.draftsDialog = false;
-      }
-      else {
-        this.eventBus.emit("show_message", {
-          title: `Select an invoice to load`,
-          color: "error",
-        });
+        // Initialize items
+        invoice.items = invoice.items.map(item => ({
+          ...item,
+          qty: item.qty || 0,
+          rate: item.rate || 0,
+          amount: item.amount || 0,
+          actual_qty: item.actual_qty || 0,
+          stock_qty: item.stock_qty || 0
+        }));
+
+        return invoice;
+      } catch (error) {
+        console.error('Error initializing invoice:', error);
+        throw error;
       }
     },
+
+    submit_dialog() {
+      try {
+        if (this.selected.length === 0) {
+          this.showError('Select an invoice to load');
+          return;
+        }
+
+        // Get selected invoice and initialize its data
+        const invoice = this.initializeInvoiceData(this.selected[0]);
+
+        // Emit load_invoice event with initialized data
+        this.eventBus.emit('load_invoice', invoice);
+        this.draftsDialog = false;
+        this.showSuccess('Invoice loaded successfully');
+
+      } catch (error) {
+        console.error('Error in submit_dialog:', error);
+        this.showError(error.message || 'Failed to load invoice');
+      }
+    }
   },
   created: function () {
     this.eventBus.on('open_drafts', (data) => {
-      this.draftsDialog = true;
-      this.dialog_data = data;
+      try {
+        if (!data) {
+          throw new Error('No draft data received');
+        }
+        this.draftsDialog = true;
+        this.dialog_data = data;
+        this.selected = [];
+      } catch (error) {
+        console.error('Error in open_drafts event:', error);
+        this.showError(error.message);
+      }
     });
   },
   beforeUnmount() {
