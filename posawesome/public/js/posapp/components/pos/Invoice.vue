@@ -1686,7 +1686,7 @@ export default {
         const isOnline = navigator.onLine;
         
         if (!isOnline) {
-          // For offline mode, prepare offline data
+          // For offline mode, prepare offline data and show payment card
           const offlineData = {
             offline: true,
             invoice_data: {
@@ -1698,7 +1698,7 @@ export default {
           };
           
           // Emit event for offline handling
-          this.eventBus.emit('show_payment', offlineData);
+          this.eventBus.emit('show_payment_dialog', offlineData);
           
         } else {
           // For online mode, update invoice first
@@ -1714,8 +1714,8 @@ export default {
             result.message.payments = [];
           }
           
-          // Emit event with online data
-          this.eventBus.emit('show_payment', {
+          // For online mode, emit different event to show payments table
+          this.eventBus.emit('show_payments_table', {
             offline: false,
             invoice_doc: result.message
           });

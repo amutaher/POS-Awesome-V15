@@ -711,6 +711,9 @@ export default {
       error_queue: [], // Queue for failed submissions to retry
       max_retries: 3, // Maximum number of retry attempts
       retry_delay: 1000, // Base delay for retry (will be multiplied by attempt count)
+      showPaymentDialog: false,
+      showPaymentsTable: false,
+      offline_data: null,
     };
   },
   computed: {
@@ -1802,6 +1805,20 @@ export default {
         });
       }
     },
+    initializePaymentsTable() {
+      // Add your payments table initialization logic here
+      if (this.invoice_doc) {
+        // Set up payments table with invoice data
+        this.setupPaymentsData();
+      }
+    },
+    setupPaymentsData() {
+      // Initialize payments data from invoice_doc
+      if (this.invoice_doc.payments) {
+        // Process existing payments
+        this.processExistingPayments();
+      }
+    },
   },
   created() {
     document.addEventListener("keydown", this.shortPay.bind(this));
@@ -1965,6 +1982,45 @@ export default {
       this.eventBus.on("set_mpesa_payment", (data) => {
         this.set_mpesa_payment(data);
       });
+
+      // Handle offline payment dialog
+      this.eventBus.on("show_payment_dialog", (data) => {
+        try {
+          console.log('Payment dialog data received:', data);
+          
+          if (!data || (typeof data !== 'object')) {
+            console.error('Invalid payment dialog data');
+            return;
+          }
+
+          this.offline_data = data;
+          this.showPaymentDialog = true;
+          this.showPaymentsTable = false;
+        } catch (error) {
+          console.error('Error in payment dialog handling:', error);
+        }
+      });
+
+      // Handle online payments table
+      this.eventBus.on("show_payments_table", (data) => {
+        try {
+          console.log('Payments table data received:', data);
+          
+          if (!data || !data.invoice_doc) {
+            console.error('Invalid payments table data');
+            return;
+          }
+
+          this.invoice_doc = data.invoice_doc;
+          this.showPaymentsTable = true;
+          this.showPaymentDialog = false;
+          
+          // Initialize payments table data
+          this.initializePaymentsTable();
+        } catch (error) {
+          console.error('Error in payments table handling:', error);
+        }
+      });
     });
   },
   beforeUnmount() {
@@ -1976,6 +2032,8 @@ export default {
     this.eventBus.off("set_pos_settings");
     this.eventBus.off("set_customer_info_to_edit");
     this.eventBus.off("set_mpesa_payment");
+    this.eventBus.off("show_payment_dialog");
+    this.eventBus.off("show_payments_table");
   },
   unmounted() {
     document.removeEventListener("keydown", this.shortPay);
