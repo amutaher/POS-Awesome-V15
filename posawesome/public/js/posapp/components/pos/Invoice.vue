@@ -4348,7 +4348,7 @@ export default {
       }
     },
 
-    async submit_invoice() {
+    async submit_invoice(data = {}, print = false) {
       try {
         if (!this.invoice_doc) {
           throw new Error('No invoice to submit');
@@ -4391,11 +4391,13 @@ export default {
           additional_discount_percentage: this.invoice_doc.additional_discount_percentage || 0,
           grand_total: this.invoice_doc.grand_total,
           rounded_total: this.invoice_doc.rounded_total || this.invoice_doc.grand_total,
-          status: 'Draft'
+          status: 'Draft',
+          ...this.invoice_doc, // Merge existing invoice data
+          ...data // Merge additional data
         };
 
         // Validate required fields
-        const requiredFields = ['company', 'customer', 'items'];
+        const requiredFields = ['doctype', 'company', 'customer', 'items'];
         for (const field of requiredFields) {
           if (!submissionData[field]) {
             throw new Error(`${field} is required`);
@@ -4408,15 +4410,27 @@ export default {
         }
 
         for (const item of submissionData.items) {
-          if (!item.item_code || !item.qty || !item.rate) {
-            throw new Error('Item code, quantity and rate are required for all items');
+          if (!item.doctype || !item.item_code || !item.qty || !item.rate) {
+            throw new Error('Item doctype, code, quantity and rate are required for all items');
+          }
+        }
+
+        // Validate payments
+        if (submissionData.payments) {
+          for (const payment of submissionData.payments) {
+            if (!payment.doctype || !payment.mode_of_payment || !payment.amount) {
+              throw new Error('Payment doctype, mode and amount are required for all payments');
+            }
           }
         }
 
         // Submit invoice
         const result = await frappe.call({
           method: 'posawesome.posawesome.api.posapp.submit_invoice',
-          args: { invoice: submissionData }
+          args: { 
+            invoice: JSON.stringify(submissionData),
+            data: JSON.stringify(data)
+          }
         });
 
         if (!result.message) {
