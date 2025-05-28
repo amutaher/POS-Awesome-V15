@@ -1556,7 +1556,7 @@ export default {
         }
         const result = await frappe.call({
           method: 'posawesome.posawesome.api.posapp.update_invoice',
-          args: { invoice },
+          args: { data: invoice },  // Changed from { invoice } to { data: invoice }
         });
         return result;
       } catch (error) {
