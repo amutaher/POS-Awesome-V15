@@ -1415,9 +1415,14 @@ def get_items_details(pos_profile, items_data):
                     frappe.cache().delete_value('bin_qty_cache')
                 
                 item_stock_qty = get_stock_availability(item_code, warehouse)
-                (has_batch_no, has_serial_no) = frappe.db.get_value(
+                
+                # Get item details with fallback for non-existent items
+                item_details = frappe.db.get_value(
                     "Item", item_code, ["has_batch_no", "has_serial_no"]
                 )
+                has_batch_no = item_details[0] if item_details else 0
+                has_serial_no = item_details[1] if item_details else 0
+
                 uoms = frappe.get_all(
                     "UOM Conversion Detail",
                     filters={"parent": item_code},
