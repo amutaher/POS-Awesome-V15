@@ -3039,3 +3039,64 @@ def validate_dynamic_fields(doc):
 def ping():
     """Simple endpoint to verify backend connectivity"""
     return 'pong'
+
+def auto_set_delivery_charges(doc):
+    """Auto set delivery charges based on POS Profile settings"""
+    if not doc.is_pos or not doc.pos_profile:
+        return
+
+    pos_profile = frappe.get_doc("POS Profile", doc.pos_profile)
+    if not pos_profile.posa_use_delivery_charges:
+        return
+
+    if hasattr(doc, 'posa_delivery_charges') and doc.posa_delivery_charges:
+        return
+
+    if not doc.shipping_address_name:
+        return
+
+    applicable_charges = get_applicable_delivery_charges(
+        doc.company,
+        doc.pos_profile,
+        doc.customer,
+        doc.shipping_address_name
+    )
+
+    if applicable_charges:
+        doc.posa_delivery_charges = applicable_charges[0].name
+        doc.posa_delivery_charges_rate = applicable_charges[0].rate
+
+def calc_delivery_charges(doc):
+    """Calculate delivery charges if enabled in POS Profile"""
+    if not doc.is_pos or not doc.pos_profile:
+        return
+
+    pos_profile = frappe.get_doc("POS Profile", doc.pos_profile)
+    if not pos_profile.posa_use_delivery_charges:
+        return
+
+    if not hasattr(doc, 'posa_delivery_charges') or not doc.posa_delivery_charges:
+        return
+
+    delivery_charges = frappe.get_doc("POS Delivery Charges", doc.posa_delivery_charges)
+    if not delivery_charges:
+        return
+
+    # Set delivery charges rate
+    doc.posa_delivery_charges_rate = delivery_charges.rate
+
+    # Add delivery charges to taxes if not already added
+    found = False
+    for tax in doc.taxes:
+        if tax.charge_type == "Actual" and tax.account_head == delivery_charges.account:
+            tax.tax_amount = doc.posa_delivery_charges_rate
+            found = True
+            break
+
+    if not found and delivery_charges.account:
+        doc.append("taxes", {
+            "charge_type": "Actual",
+            "account_head": delivery_charges.account,
+            "description": _("Delivery Charges"),
+            "tax_amount": doc.posa_delivery_charges_rate
+        })
