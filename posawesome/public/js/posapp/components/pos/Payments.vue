@@ -660,6 +660,133 @@
         </v-card>
       </v-dialog>
     </v-row>
+
+    <!-- Payments Table Section -->
+    <v-card v-if="showPaymentsTable" class="selection mx-auto bg-grey-lighten-5 pa-1" style="max-height: 76vh; height: 76vh">
+      <v-progress-linear :active="loading" :indeterminate="loading" absolute location="top" color="info"></v-progress-linear>
+      <div class="overflow-y-auto px-2 pt-2" style="max-height: 75vh">
+        
+        <!-- Payment Methods Table -->
+        <v-row v-if="payment_methods && payment_methods.length">
+          <v-col cols="12">
+            <v-card variant="outlined">
+              <v-card-title class="text-subtitle-1 font-weight-bold">
+                {{ __('Payment Methods') }}
+              </v-card-title>
+              <v-card-text>
+                <v-row v-for="method in payment_methods" :key="method.row_id">
+                  <v-col cols="8">
+                    <v-text-field
+                      :label="method.mode_of_payment"
+                      v-model="method.amount"
+                      type="number"
+                      variant="outlined"
+                      density="compact"
+                      hide-details
+                      class="mb-2"
+                    ></v-text-field>
+                  </v-col>
+                </v-row>
+              </v-card-text>
+            </v-card>
+          </v-col>
+        </v-row>
+
+        <!-- Payment Summary -->
+        <v-row v-if="invoice_doc" class="mt-4">
+          <v-col cols="6">
+            <v-text-field
+              variant="outlined"
+              color="primary"
+              :label="__('Total Amount')"
+              v-model="invoice_doc.grand_total"
+              readonly
+              hide-details
+              density="compact"
+            ></v-text-field>
+          </v-col>
+          <v-col cols="6">
+            <v-text-field
+              variant="outlined"
+              color="primary"
+              :label="__('Balance')"
+              :model-value="total_of_diff"
+              readonly
+              hide-details
+              density="compact"
+            ></v-text-field>
+          </v-col>
+        </v-row>
+
+        <!-- Submit Buttons -->
+        <v-row class="mt-4">
+          <v-col cols="6">
+            <v-btn
+              block
+              color="primary"
+              @click="submit"
+              :loading="isSubmitting"
+              :disabled="!canSubmit"
+            >
+              {{ __('Submit') }}
+            </v-btn>
+          </v-col>
+          <v-col cols="6">
+            <v-btn
+              block
+              color="error"
+              @click="close_payments"
+            >
+              {{ __('Cancel') }}
+            </v-btn>
+          </v-col>
+        </v-row>
+      </div>
+    </v-card>
+
+    <!-- Payment Dialog for Offline Mode -->
+    <v-dialog v-model="showPaymentDialog" persistent max-width="600px">
+      <v-card>
+        <v-card-title>
+          <span class="text-h5">{{ __('Payment') }}</span>
+        </v-card-title>
+        <v-card-text>
+          <v-container>
+            <v-row>
+              <v-col cols="12" sm="6" md="6">
+                <v-text-field
+                  v-model="payment_grand_total"
+                  :label="__('Amount')"
+                  readonly
+                  outlined
+                  dense
+                  :prefix="payment_currency"
+                ></v-text-field>
+              </v-col>
+              <v-col cols="12" sm="6" md="6">
+                <v-select
+                  v-model="selected_payment_mode"
+                  :items="payment_types"
+                  :label="__('Payment Type')"
+                  outlined
+                  dense
+                  :disabled="payment_offline_mode"
+                ></v-select>
+              </v-col>
+            </v-row>
+          </v-container>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer></v-spacer>
+          <v-btn color="error" @click="close_payment_dialog">
+            {{ __('Close') }}
+          </v-btn>
+          <v-btn color="success" @click="submit_payment_dialog">
+            {{ __('Submit') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -824,6 +951,10 @@ export default {
     },
     submitButtonDisabled() {
       return this.is_processing_submit || this.vaildatPayment;
+    },
+    canSubmit() {
+      if (!this.invoice_doc) return false;
+      return this.total_of_diff <= 0;
     },
   },
   watch: {
@@ -1851,6 +1982,13 @@ export default {
       }));
       
       console.log('Payment methods initialized:', this.payment_methods);
+    },
+    close_payments() {
+      this.showPaymentsTable = false;
+      this.showPaymentDialog = false;
+      this.invoice_doc = null;
+      this.payment_methods = [];
+      this.eventBus.emit('close_payments');
     },
   },
   created() {

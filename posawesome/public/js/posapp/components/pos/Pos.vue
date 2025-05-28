@@ -652,6 +652,28 @@ export default {
     window.removeEventListener('online', this.setupNetworkListeners);
     window.removeEventListener('offline', this.setupNetworkListeners);
   },
+  created() {
+    this.eventBus.on('show_payments_table', () => {
+      this.payment = true;
+      this.offers = false;
+      this.coupons = false;
+    });
+
+    this.eventBus.on('close_payments', () => {
+      this.payment = false;
+    });
+
+    this.eventBus.on('show_payment_dialog', () => {
+      this.payment = true;
+      this.offers = false;
+      this.coupons = false;
+    });
+  },
+  beforeUnmount() {
+    this.eventBus.off('show_payments_table');
+    this.eventBus.off('close_payments');
+    this.eventBus.off('show_payment_dialog');
+  }
 };
 </script>
 
