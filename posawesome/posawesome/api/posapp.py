@@ -832,11 +832,27 @@ def submit_invoice(invoice, data):
                 title=_("Invalid Action")
             )
     
+    # Get POS Profile
+    pos_profile = frappe.get_doc("POS Profile", invoice.get("pos_profile"))
+    
     # Sanitize the invoice data
     sanitized_invoice = sanitize_invoice_data(invoice)
+    
+    # Set required accounts from POS Profile
+    sanitized_invoice["debit_to"] = frappe.get_value("Company", sanitized_invoice.get("company"), "default_receivable_account")
+    
+    # Get income account from POS Profile or Company
+    income_account = pos_profile.get("income_account") or frappe.get_value("Company", sanitized_invoice.get("company"), "default_income_account")
+    if not income_account:
+        frappe.throw(_("Please set Income Account in POS Profile or Company"))
+    
+    # Set income account for all items
+    for item in sanitized_invoice.get("items", []):
+        item["income_account"] = income_account
+    
     invoice_doc = frappe.get_doc(sanitized_invoice)
     
-    # Validate all dynamic fields including loyalty and credit redemptions
+    # Rest of the existing code...
     validate_dynamic_fields(invoice_doc)
     
     # Store original values for validation
