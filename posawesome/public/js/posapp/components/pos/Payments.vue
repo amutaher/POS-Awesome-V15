@@ -1776,8 +1776,28 @@ export default {
 
     this.eventBus.on('show_payment', async (data) => {
       try {
+        // Validate data
+        if (!data) {
+          console.error('Invalid payment data received');
+          this.eventBus.emit("show_message", {
+            title: __('Invalid payment data'),
+            color: "error",
+          });
+          return;
+        }
+
         // Only show payment dialog in offline mode
         if (typeof data === 'object' && data.offline) {
+          // Validate invoice data
+          if (!data.invoice_data) {
+            console.error('Invalid offline invoice data');
+            this.eventBus.emit("show_message", {
+              title: __('Invalid invoice data'),
+              color: "error",
+            });
+            return;
+          }
+
           this.payment_dialog = true;
           this.payment_offline_mode = true;
           this.invoice_doc = data.invoice_data;
@@ -1789,6 +1809,21 @@ export default {
           // In online mode, directly process without showing dialog
           this.payment_offline_mode = false;
           this.invoice_doc = typeof data === 'object' ? data.invoice_doc : null;
+          
+          // Validate invoice doc
+          if (!this.invoice_doc) {
+            console.error('Invalid invoice doc in online mode');
+            this.eventBus.emit("show_message", {
+              title: __('Invalid invoice data'),
+              color: "error",
+            });
+            return;
+          }
+
+          // Initialize payments array if not present
+          if (!this.invoice_doc.payments) {
+            this.invoice_doc.payments = [];
+          }
           
           if (navigator.onLine && this.invoice_doc) {
             try {
@@ -1817,6 +1852,21 @@ export default {
   mounted() {
     this.$nextTick(() => {
       this.eventBus.on("send_invoice_doc_payment", (invoice_doc) => {
+        // Validate invoice doc
+        if (!invoice_doc) {
+          console.error('Invalid invoice doc received');
+          this.eventBus.emit("show_message", {
+            title: __('Invalid invoice data'),
+            color: "error",
+          });
+          return;
+        }
+
+        // Initialize payments array if not present
+        if (!invoice_doc.payments) {
+          invoice_doc.payments = [];
+        }
+
         this.invoice_doc = invoice_doc;
         const default_payment = this.invoice_doc.payments.find(
           (payment) => payment.default === 1

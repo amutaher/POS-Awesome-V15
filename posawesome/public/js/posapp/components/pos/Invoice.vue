@@ -1669,14 +1669,28 @@ export default {
       try {
         console.log('Starting show_payment process');
         
+        // Check if there are items
+        if (!this.items || this.items.length === 0) {
+          this.showError('Please add items to the invoice');
+          return;
+        }
+
         // Get current invoice data using get_invoice_doc
         const doc = this.get_invoice_doc();
+        
+        // Validate invoice doc
+        if (!doc) {
+          this.showError('Failed to prepare invoice data');
+          return;
+        }
+
         const invoice_data = {
           items_count: this.items.length,
           customer: this.customer,
           is_return: doc.is_return || false,
           currency: this.selected_currency || this.pos_profile.currency,
           grand_total: this.subtotal,
+          payments: doc.payments || [], // Ensure payments array exists
           ...doc
         };
         
@@ -1741,6 +1755,11 @@ export default {
             if (!result) {
               this.showError('Failed to process invoice');
               return;
+            }
+            
+            // Ensure payments array exists in result
+            if (!result.message.payments) {
+              result.message.payments = [];
             }
             
             // Emit event with online data
