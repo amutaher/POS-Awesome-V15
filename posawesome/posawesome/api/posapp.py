@@ -2974,7 +2974,7 @@ def validate_dynamic_fields(doc):
         frappe.throw(_("Returns are not allowed in this POS Profile"))
         
     # Validate if sales order creation is allowed
-    if doc.posa_is_sales_order and not pos_profile.posa_allow_sales_order:
+    if hasattr(doc, 'posa_is_sales_order') and doc.posa_is_sales_order and not pos_profile.posa_allow_sales_order:
         frappe.throw(_("Sales Order creation is not allowed in this POS Profile"))
         
     # Validate if customer credit is allowed
