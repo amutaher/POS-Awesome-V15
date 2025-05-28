@@ -4356,7 +4356,7 @@ export default {
 
         // Ensure required fields are set
         const submissionData = {
-          doctype: 'Sales Invoice',
+          doctype: 'Sales Invoice',  // Set main doctype
           docstatus: 0,
           is_pos: 1,
           company: this.invoice_doc.company,
@@ -4365,7 +4365,7 @@ export default {
           customer: this.invoice_doc.customer,
           customer_name: this.invoice_doc.customer_name,
           items: this.invoice_doc.items.map(item => ({
-            doctype: 'Sales Invoice Item',
+            doctype: 'Sales Invoice Item',  // Set item doctype
             item_code: item.item_code,
             item_name: item.item_name,
             description: item.description,
@@ -4378,11 +4378,22 @@ export default {
             warehouse: item.warehouse
           })),
           payments: this.invoice_doc.payments.map(payment => ({
-            doctype: 'Sales Invoice Payment',
+            doctype: 'Sales Invoice Payment',  // Set payment doctype
             mode_of_payment: payment.mode_of_payment,
             amount: payment.amount,
             account: payment.account,
             type: payment.type || 'Receive'
+          })),
+          taxes: (this.invoice_doc.taxes || []).map(tax => ({
+            doctype: 'Sales Taxes and Charges',  // Set tax doctype
+            charge_type: tax.charge_type,
+            account_head: tax.account_head,
+            description: tax.description,
+            rate: tax.rate,
+            tax_amount: tax.tax_amount,
+            total: tax.total,
+            base_tax_amount: tax.base_tax_amount,
+            base_total: tax.base_total
           })),
           is_return: this.invoice_doc.is_return || false,
           return_against: this.invoice_doc.return_against || '',
@@ -4392,8 +4403,8 @@ export default {
           grand_total: this.invoice_doc.grand_total,
           rounded_total: this.invoice_doc.rounded_total || this.invoice_doc.grand_total,
           status: 'Draft',
-          ...this.invoice_doc, // Merge existing invoice data
-          ...data // Merge additional data
+          ...this.invoice_doc,  // Merge existing invoice data
+          ...data  // Merge additional data
         };
 
         // Validate required fields

@@ -623,6 +623,7 @@ def sanitize_invoice_data(invoice_data):
     # Define whitelisted fields that can be updated from frontend
     whitelisted_fields = {
         # Basic invoice fields
+        'doctype': str,  # Add doctype field
         'customer': str,
         'posting_date': str,
         'due_date': str,
