@@ -2800,7 +2800,6 @@ def validate(doc, method):
     if doc.is_pos and doc.pos_profile:
         validate_dynamic_fields(doc)
         validate_shift(doc)
-    set_patient(doc)
     auto_set_delivery_charges(doc)
     calc_delivery_charges(doc)
 
