@@ -2978,7 +2978,7 @@ def validate_dynamic_fields(doc):
         frappe.throw(_("Sales Order creation is not allowed in this POS Profile"))
         
     # Validate if customer credit is allowed
-    if doc.redeemed_customer_credit and not pos_profile.posa_allow_credit_sale:
+    if hasattr(doc, 'redeemed_customer_credit') and doc.redeemed_customer_credit and not pos_profile.posa_allow_credit_sale:
         frappe.throw(_("Customer credit is not allowed in this POS Profile"))
         
     # Validate if delivery charges are allowed
@@ -3004,7 +3004,7 @@ def validate_dynamic_fields(doc):
             )
     
     # Validate customer credit redemption
-    if doc.redeemed_customer_credit:
+    if hasattr(doc, 'redeemed_customer_credit') and doc.redeemed_customer_credit:
         if not pos_profile.posa_allow_credit_sale:
             frappe.throw(_("Customer credit is not allowed in this POS Profile"))
             
