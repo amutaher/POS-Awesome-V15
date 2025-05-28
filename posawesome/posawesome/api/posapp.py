@@ -2950,7 +2950,7 @@ def validate_dynamic_fields(doc):
         frappe.throw(_("Editing rate is not allowed in this POS Profile"))
     
     # Validate if editing discount is allowed
-    if not pos_profile.posa_allow_discount and any(item.discount_percentage > 0 or item.discount_amount > 0 for item in doc.items):
+    if not pos_profile.posa_allow_user_to_edit_item_discount and any(item.discount_percentage > 0 or item.discount_amount > 0 for item in doc.items):
         frappe.throw(_("Editing discount is not allowed in this POS Profile"))
         
     # Validate if editing item is allowed after adding
