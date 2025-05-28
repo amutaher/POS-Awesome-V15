@@ -982,112 +982,80 @@ export default {
 
     // Load an invoice (or return invoice) from data, set all fields accordingly
     async load_invoice(data = {}) {
-      console.log("load_invoice called with data:", {
-        is_return: data.is_return,
-        return_against: data.return_against,
-        customer: data.customer,
-        items_count: data.items ? data.items.length : 0
-      });
-      
-      // Validate invoice data
-      if (!data) {
-        console.error('Invalid invoice data received');
-        this.eventBus.emit("show_message", {
-          title: __('Invalid invoice data'),
-          color: "error",
+      try {
+        console.log("load_invoice called with data:", {
+          is_return: data.is_return,
+          return_against: data.return_against,
+          customer: data.customer,
+          items_count: data.items ? data.items.length : 0
         });
-        return;
-      }
-
-      // Initialize required properties if not present
-      if (!data.payments) {
-        data.payments = [];
-      }
-
-      if (!data.items) {
-        data.items = [];
-      }
-
-      // Ensure other required properties exist
-      data.is_return = data.is_return || false;
-      data.grand_total = data.grand_total || 0;
-      data.rounded_total = data.rounded_total || data.grand_total;
-      
-      this.clear_invoice()
-      if (data.is_return) {
-        console.log("Processing return invoice");
-        // For return without invoice case, check if there's a return_against
-        // Only set customer readonly if this is a return with reference to an invoice
-        if (data.return_against) {
-          console.log("Return has reference to invoice:", data.return_against);
-          this.eventBus.emit("set_customer_readonly", true);
-        } else {
-          console.log("Return without invoice reference, customer can be selected");
-          // Allow customer selection for returns without invoice
-          this.eventBus.emit("set_customer_readonly", false);
-        }
-        this.invoiceType = "Return";
-        this.invoiceTypes = ["Return"];
-      }
-      
-      this.invoice_doc = data;
-      this.items = data.items || [];
-      console.log("Items set:", this.items.length, "items");
-      
-      if (this.items.length > 0) {
-        this.update_items_details(this.items);
-        this.posa_offers = data.posa_offers || [];
-        this.items.forEach((item) => {
-          if (!item.posa_row_id) {
-            item.posa_row_id = this.makeid(20);
-          }
-          if (item.batch_no) {
-            this.set_batch_qty(item, item.batch_no);
-          }
-          // Try to restore draft state for the item
-          this.restore_item_draft_state(item);
-        });
-      } else {
-        console.log("Warning: No items in return invoice");
-      }
-      
-      this.customer = data.customer;
-      this.posting_date = data.posting_date || frappe.datetime.nowdate();
-      this.discount_amount = data.discount_amount;
-      this.additional_discount_percentage =
-        data.additional_discount_percentage;
         
-      if (this.items.length > 0) {
-        this.items.forEach((item) => {
-          if (item.serial_no) {
-            item.serial_no_selected = [];
-            const serial_list = item.serial_no.split("\n");
-            serial_list.forEach((element) => {
-              if (element.length) {
-                item.serial_no_selected.push(element);
-              }
-            });
-            item.serial_no_selected_count = item.serial_no_selected.length;
-          }
+        // Validate invoice data
+        if (!data) {
+          throw new Error('Invalid invoice data received');
+        }
+
+        // Initialize required properties if not present
+        data.payments = data.payments || [];
+        data.items = data.items || [];
+        data.is_return = data.is_return || false;
+        data.grand_total = data.grand_total || 0;
+        data.rounded_total = data.rounded_total || data.grand_total;
+        data.total_taxes_and_charges = data.total_taxes_and_charges || 0;
+        data.discount_amount = data.discount_amount || 0;
+        data.additional_discount_percentage = data.additional_discount_percentage || 0;
+
+        // Validate items
+        if (!Array.isArray(data.items)) {
+          throw new Error('Invalid items data');
+        }
+
+        // Validate payments
+        if (!Array.isArray(data.payments)) {
+          throw new Error('Invalid payments data');
+        }
+
+        // Load invoice data
+        this.invoice_doc = data;
+        this.return_doc = null;
+        this.invoice_doc.doctype = 'Sales Invoice';
+        this.invoice_doc.is_pos = 1;
+        this.invoice_doc.is_return = data.is_return || 0;
+        this.invoice_doc.return_against = data.return_against || '';
+        this.invoice_doc.pos_profile = this.pos_profile.name;
+        this.invoice_doc.company = this.pos_profile.company;
+        this.invoice_doc.currency = this.pos_profile.currency;
+        this.invoice_doc.conversion_rate = 1;
+        this.invoice_doc.selling_price_list = this.pos_profile.selling_price_list;
+        this.invoice_doc.plc_conversion_rate = 1;
+        this.invoice_doc.status = 'Draft';
+        this.invoice_doc.items = data.items;
+        this.invoice_doc.payments = data.payments;
+
+        // Update UI
+        this.update_items();
+        this.update_totals();
+        this.update_discount();
+        this.update_taxes();
+        this.update_grand_total();
+
+        // Show success message
+        this.eventBus.emit('show_message', {
+          title: __('Invoice loaded successfully'),
+          color: 'success'
         });
+
+      } catch (error) {
+        console.error('Error loading invoice:', error);
+        this.eventBus.emit('show_message', {
+          title: __('Failed to load invoice: ') + error.message,
+          color: 'error'
+        });
+        
+        // Reset invoice state
+        this.invoice_doc = null;
+        this.return_doc = null;
       }
-      
-      if (data.is_return) {
-        console.log("Setting return values for discounts");
-        this.discount_amount = -data.discount_amount;
-        this.additional_discount_percentage =
-          -data.additional_discount_percentage;
-        this.return_doc = data;
-      } else {
-        this.eventBus.emit("set_pos_coupons", data.posa_coupons);
-      }
-      
-      console.log("load_invoice completed, invoice state:", {
-        invoiceType: this.invoiceType,
-        is_return: this.invoice_doc.is_return,
-        items: this.items.length,
-        customer: this.customer
-      });
     },
 
     // Save and clear the current invoice (draft logic)
