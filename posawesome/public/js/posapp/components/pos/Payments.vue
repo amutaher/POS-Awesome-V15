@@ -1396,7 +1396,7 @@ export default {
       formData["is_cashback"] = this.is_cashback;
       frappe.call({
         method: "posawesome.posawesome.api.posapp.update_invoice",
-        args: { data: formData },
+        args: { data: JSON.stringify(formData) },
         async: false,
         callback: function (r) {
           if (r.message) {

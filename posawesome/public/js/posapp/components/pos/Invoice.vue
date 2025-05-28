@@ -1578,7 +1578,7 @@ export default {
       frappe.call({
         method: "posawesome.posawesome.api.posapp.update_invoice_from_order",
         args: {
-          data: doc,
+          data: JSON.stringify(doc),  // Stringify the doc data
         },
         async: false,
         callback: function (r) {

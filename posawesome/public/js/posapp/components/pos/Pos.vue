@@ -276,7 +276,7 @@ export default {
         // Online mode - make API call
         const result = await frappe.call({
           method: 'posawesome.posawesome.api.posapp.update_invoice',
-          args: { invoice: invoice_data }
+          args: { data: JSON.stringify(invoice_data) }
         });
         return result;
       } catch (error) {
