@@ -1806,18 +1806,51 @@ export default {
       }
     },
     initializePaymentsTable() {
-      // Add your payments table initialization logic here
-      if (this.invoice_doc) {
-        // Set up payments table with invoice data
-        this.setupPaymentsData();
+      try {
+        console.log('Initializing payments table');
+        if (this.invoice_doc) {
+          this.setupPaymentsData();
+        }
+      } catch (error) {
+        console.error('Error initializing payments table:', error);
       }
     },
     setupPaymentsData() {
-      // Initialize payments data from invoice_doc
-      if (this.invoice_doc.payments) {
-        // Process existing payments
-        this.processExistingPayments();
+      try {
+        console.log('Setting up payments data');
+        if (this.invoice_doc.payments) {
+          // Initialize payment methods if not already done
+          if (!this.payment_methods || !this.payment_methods.length) {
+            this.set_payment_methods();
+          }
+
+          // Map existing payments to payment methods
+          this.invoice_doc.payments.forEach(payment => {
+            const existingMethod = this.payment_methods.find(
+              method => method.mode_of_payment === payment.mode_of_payment
+            );
+            
+            if (existingMethod) {
+              existingMethod.amount = payment.amount;
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Error setting up payments data:', error);
       }
+    },
+    set_payment_methods() {
+      // get payment methods from pos profile
+      if (!this.pos_profile.payments) return;
+      
+      this.payment_methods = this.pos_profile.payments.map(method => ({
+        mode_of_payment: method.mode_of_payment,
+        amount: 0,
+        row_id: method.name,
+        account: method.account
+      }));
+      
+      console.log('Payment methods initialized:', this.payment_methods);
     },
   },
   created() {
