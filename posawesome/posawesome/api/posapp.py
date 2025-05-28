@@ -3122,3 +3122,27 @@ def calc_delivery_charges(doc):
             "description": _("Delivery Charges"),
             "tax_amount": doc.posa_delivery_charges_rate
         })
+
+def submit_invoice(invoice_doc):
+    if not invoice_doc.is_pos:
+        frappe.throw(_("Not a POS Invoice"))
+    
+    # Get POS Profile
+    pos_profile = frappe.get_doc("POS Profile", invoice_doc.pos_profile)
+    
+    # Auto-fetch income account if not set in POS Profile
+    if not pos_profile.income_account:
+        # Try to get default income account from company
+        default_income_account = frappe.get_cached_value(
+            "Company", 
+            invoice_doc.company,
+            ["default_income_account"]
+        )
+        
+        if default_income_account:
+            pos_profile.income_account = default_income_account
+            pos_profile.save()
+        else:
+            frappe.throw(_("Please set Default Income Account in Company or Income Account in POS Profile"))
+    
+    validate_pos_invoice(invoice_doc)
