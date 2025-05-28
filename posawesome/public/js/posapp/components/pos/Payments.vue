@@ -1581,13 +1581,45 @@ export default {
           this.eventBus.emit("clear_invoice");
           this.eventBus.emit("reset_posting_date");
           this.back_to_invoice();
+        } else {
+          // Online mode - process payment and submit invoice
+          if (!this.invoice_doc) {
+            throw new Error('No invoice to submit');
+          }
+
+          // Add payment details to invoice
+          this.invoice_doc.payments = [{
+            mode_of_payment: this.selected_payment_mode,
+            amount: this.payment_grand_total,
+            base_amount: this.payment_grand_total,
+            account: this.pos_profile.payments.find(p => p.mode_of_payment === this.selected_payment_mode)?.account || '',
+            type: 'Receive'
+          }];
+
+          // Submit invoice
+          await this.submit();
+
+          this.eventBus.emit('show_message', {
+            title: __('Payment processed successfully'),
+            color: 'success'
+          });
+
+          // Clear current invoice and show new invoice page
+          this.customer_credit_dict = [];
+          this.redeem_customer_credit = false;
+          this.is_cashback = true;
+          this.sales_person = "";
+          this.addresses = [];
+          this.eventBus.emit("clear_invoice");
+          this.eventBus.emit("reset_posting_date");
+          this.back_to_invoice();
         }
         
         this.close_payment_dialog();
       } catch (error) {
         console.error('Payment submission error:', error);
         this.eventBus.emit('show_message', {
-          title: __('Failed to process payment'),
+          title: __('Failed to process payment: ') + error.message,
           color: 'error'
         });
       }
@@ -1806,7 +1838,8 @@ export default {
           this.payment_currency = data.invoice_data.currency || 'PKR';
           this.selected_payment_mode = 'Cash';
         } else {
-          // In online mode, directly process without showing dialog
+          // In online mode, show payment dialog first
+          this.payment_dialog = true;
           this.payment_offline_mode = false;
           this.invoice_doc = typeof data === 'object' ? data.invoice_doc : null;
           
@@ -1824,20 +1857,15 @@ export default {
           if (!this.invoice_doc.payments) {
             this.invoice_doc.payments = [];
           }
-          
-          if (navigator.onLine && this.invoice_doc) {
-            try {
-              await this.get_addresses();
-              await this.get_sales_person_names();
-              // Process payment directly
-              this.submit();
-            } catch (error) {
-              console.error('Failed to process online payment:', error);
-              this.eventBus.emit('show_message', {
-                title: __('Error processing payment'),
-                color: 'error'
-              });
-            }
+
+          this.payment_grand_total = this.invoice_doc.grand_total || 0;
+          this.payment_currency = this.invoice_doc.currency || 'PKR';
+          this.selected_payment_mode = 'Cash';
+
+          // Load addresses and sales persons in background
+          if (navigator.onLine) {
+            this.get_addresses().catch(console.error);
+            this.get_sales_person_names().catch(console.error);
           }
         }
       } catch (error) {
