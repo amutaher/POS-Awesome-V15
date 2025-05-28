@@ -5315,7 +5315,7 @@
   "description": "Origin details for POS Awesome payments",
   "docstatus": 0,
   "doctype": "Custom Field",
-  "dt": "Payment Entry",
+  "dt": "POS Profile",
   "fetch_from": null,
   "fetch_if_empty": 0,
   "fieldname": "posa_payment_origin",
