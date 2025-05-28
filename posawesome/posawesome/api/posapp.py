@@ -2954,7 +2954,7 @@ def validate_dynamic_fields(doc):
         frappe.throw(_("Editing discount is not allowed in this POS Profile"))
         
     # Validate if editing item is allowed after adding
-    if not pos_profile.posa_allow_item_edit and doc.posa_is_printed:
+    if not pos_profile.posa_allow_edit_after_submit and doc.posa_is_printed:
         original_doc = frappe.get_doc("Sales Invoice", doc.name) if doc.name else None
         if original_doc:
             original_items = {item.item_code: item.qty for item in original_doc.items}
