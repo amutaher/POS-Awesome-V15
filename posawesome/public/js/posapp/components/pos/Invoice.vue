@@ -4347,6 +4347,99 @@ export default {
         console.error('Error clearing item draft state:', error);
       }
     },
+
+    async submit_invoice() {
+      try {
+        if (!this.invoice_doc) {
+          throw new Error('No invoice to submit');
+        }
+
+        // Ensure required fields are set
+        const submissionData = {
+          doctype: 'Sales Invoice',
+          docstatus: 0,
+          is_pos: 1,
+          company: this.invoice_doc.company,
+          posting_date: this.invoice_doc.posting_date || frappe.datetime.nowdate(),
+          posting_time: this.invoice_doc.posting_time || frappe.datetime.now_time(),
+          customer: this.invoice_doc.customer,
+          customer_name: this.invoice_doc.customer_name,
+          items: this.invoice_doc.items.map(item => ({
+            doctype: 'Sales Invoice Item',
+            item_code: item.item_code,
+            item_name: item.item_name,
+            description: item.description,
+            qty: item.qty,
+            rate: item.rate,
+            amount: item.amount,
+            uom: item.uom,
+            conversion_factor: item.conversion_factor || 1,
+            stock_uom: item.stock_uom,
+            warehouse: item.warehouse
+          })),
+          payments: this.invoice_doc.payments.map(payment => ({
+            doctype: 'Sales Invoice Payment',
+            mode_of_payment: payment.mode_of_payment,
+            amount: payment.amount,
+            account: payment.account,
+            type: payment.type || 'Receive'
+          })),
+          is_return: this.invoice_doc.is_return || false,
+          return_against: this.invoice_doc.return_against || '',
+          total_taxes_and_charges: this.invoice_doc.total_taxes_and_charges || 0,
+          discount_amount: this.invoice_doc.discount_amount || 0,
+          additional_discount_percentage: this.invoice_doc.additional_discount_percentage || 0,
+          grand_total: this.invoice_doc.grand_total,
+          rounded_total: this.invoice_doc.rounded_total || this.invoice_doc.grand_total,
+          status: 'Draft'
+        };
+
+        // Validate required fields
+        const requiredFields = ['company', 'customer', 'items'];
+        for (const field of requiredFields) {
+          if (!submissionData[field]) {
+            throw new Error(`${field} is required`);
+          }
+        }
+
+        // Validate items
+        if (!submissionData.items.length) {
+          throw new Error('No items in invoice');
+        }
+
+        for (const item of submissionData.items) {
+          if (!item.item_code || !item.qty || !item.rate) {
+            throw new Error('Item code, quantity and rate are required for all items');
+          }
+        }
+
+        // Submit invoice
+        const result = await frappe.call({
+          method: 'posawesome.posawesome.api.posapp.submit_invoice',
+          args: { invoice: submissionData }
+        });
+
+        if (!result.message) {
+          throw new Error('Failed to submit invoice');
+        }
+
+        // Show success message
+        this.eventBus.emit('show_message', {
+          title: __('Invoice submitted successfully'),
+          color: 'success'
+        });
+
+        return result.message;
+
+      } catch (error) {
+        console.error('Error submitting invoice:', error);
+        this.eventBus.emit('show_message', {
+          title: __('Failed to submit invoice: ') + error.message,
+          color: 'error'
+        });
+        throw error;
+      }
+    }
   },
 
   mounted() {

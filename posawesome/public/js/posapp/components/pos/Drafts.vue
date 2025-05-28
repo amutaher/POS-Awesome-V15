@@ -211,26 +211,56 @@ export default {
         }
 
         // Initialize required properties
-        invoice.payments = Array.isArray(invoice.payments) ? invoice.payments : [];
-        invoice.items = Array.isArray(invoice.items) ? invoice.items : [];
-        invoice.is_return = invoice.is_return || false;
-        invoice.grand_total = invoice.grand_total || 0;
-        invoice.rounded_total = invoice.rounded_total || invoice.grand_total;
-        invoice.total_taxes_and_charges = invoice.total_taxes_and_charges || 0;
-        invoice.discount_amount = invoice.discount_amount || 0;
-        invoice.additional_discount_percentage = invoice.additional_discount_percentage || 0;
+        const initializedInvoice = {
+          doctype: 'Sales Invoice',
+          docstatus: 0,
+          is_pos: 1,
+          company: invoice.company || '',
+          posting_date: invoice.posting_date || frappe.datetime.nowdate(),
+          posting_time: invoice.posting_time || frappe.datetime.now_time(),
+          customer: invoice.customer || '',
+          customer_name: invoice.customer_name || '',
+          payments: Array.isArray(invoice.payments) ? invoice.payments : [],
+          items: Array.isArray(invoice.items) ? invoice.items : [],
+          is_return: invoice.is_return || false,
+          return_against: invoice.return_against || '',
+          grand_total: invoice.grand_total || 0,
+          rounded_total: invoice.rounded_total || invoice.grand_total || 0,
+          total_taxes_and_charges: invoice.total_taxes_and_charges || 0,
+          discount_amount: invoice.discount_amount || 0,
+          additional_discount_percentage: invoice.additional_discount_percentage || 0,
+          status: 'Draft'
+        };
 
-        // Initialize items
-        invoice.items = invoice.items.map(item => ({
-          ...item,
+        // Initialize items with required fields
+        initializedInvoice.items = initializedInvoice.items.map(item => ({
+          doctype: 'Sales Invoice Item',
+          item_code: item.item_code || '',
+          item_name: item.item_name || '',
+          description: item.description || '',
           qty: item.qty || 0,
           rate: item.rate || 0,
           amount: item.amount || 0,
           actual_qty: item.actual_qty || 0,
-          stock_qty: item.stock_qty || 0
+          stock_qty: item.stock_qty || 0,
+          uom: item.uom || '',
+          conversion_factor: item.conversion_factor || 1,
+          stock_uom: item.stock_uom || '',
+          discount_percentage: item.discount_percentage || 0,
+          discount_amount: item.discount_amount || 0,
+          warehouse: item.warehouse || ''
         }));
 
-        return invoice;
+        // Initialize payments with required fields
+        initializedInvoice.payments = initializedInvoice.payments.map(payment => ({
+          doctype: 'Sales Invoice Payment',
+          mode_of_payment: payment.mode_of_payment || '',
+          amount: payment.amount || 0,
+          account: payment.account || '',
+          type: payment.type || 'Receive'
+        }));
+
+        return initializedInvoice;
       } catch (error) {
         console.error('Error initializing invoice:', error);
         throw error;
