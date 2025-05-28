@@ -1601,7 +1601,7 @@ export default {
             message: 'Invoice processed offline'
           };
         }
-        const result = await this.update_invoice(this.get_invoice_doc());
+        const result = await this.update_invoice(this.invoice);
         return result;
       } catch (error) {
         console.error('Process invoice error:', error);
