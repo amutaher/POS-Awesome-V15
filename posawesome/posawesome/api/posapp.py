@@ -623,7 +623,8 @@ def sanitize_invoice_data(invoice_data):
     # Define whitelisted fields that can be updated from frontend
     whitelisted_fields = {
         # Basic invoice fields
-        'doctype': str,  # Add doctype field
+        'doctype': str,
+        'company': str,  # Add company field explicitly
         'customer': str,
         'posting_date': str,
         'due_date': str,
@@ -715,6 +716,10 @@ def sanitize_invoice_data(invoice_data):
                 sanitized[field] = field_type(invoice_data[field]) if invoice_data[field] is not None else None
             except (ValueError, TypeError):
                 frappe.throw(_("Invalid value for field {0}").format(field))
+    
+    # Ensure company is set
+    if not sanitized.get("company") and invoice_data.get("company"):
+        sanitized["company"] = str(invoice_data["company"])
     
     # Sanitize child tables
     for table, fields in whitelisted_child_fields.items():
@@ -834,6 +839,9 @@ def submit_invoice(invoice, data):
         if not invoice.get("company"):
             invoice["company"] = pos_profile.company
             
+        if not invoice.get("company"):
+            frappe.throw(_("Company is required and could not be determined from POS Profile"))
+            
         # Check if invoice already exists and is submitted
         if invoice.get("name"):
             existing_invoice = frappe.get_doc("Sales Invoice", invoice.get("name"))
@@ -846,6 +854,10 @@ def submit_invoice(invoice, data):
         # Sanitize the invoice data
         sanitized_invoice = sanitize_invoice_data(invoice)
         
+        # Double check company is set after sanitization
+        if not sanitized_invoice.get("company"):
+            sanitized_invoice["company"] = pos_profile.company
+            
         # Set required accounts from POS Profile
         sanitized_invoice["debit_to"] = frappe.get_value("Company", sanitized_invoice.get("company"), "default_receivable_account")
         
