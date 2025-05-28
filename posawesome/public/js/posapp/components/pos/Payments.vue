@@ -1806,10 +1806,12 @@ export default {
   created() {
     document.addEventListener("keydown", this.shortPay.bind(this));
 
-    this.eventBus.on('show_payment', async (data) => {
+    this.eventBus.on('show_payment', (data) => {
       try {
+        console.log('Payment data received:', data);
+        
         // Validate data
-        if (!data) {
+        if (!data || (typeof data !== 'object')) {
           console.error('Invalid payment data received');
           this.eventBus.emit("show_message", {
             title: __('Invalid payment data'),
@@ -1818,9 +1820,8 @@ export default {
           return;
         }
 
-        // Only show payment dialog in offline mode
-        if (typeof data === 'object' && data.offline) {
-          // Validate invoice data
+        // Handle offline mode
+        if (data.offline) {
           if (!data.invoice_data) {
             console.error('Invalid offline invoice data');
             this.eventBus.emit("show_message", {
@@ -1830,21 +1831,17 @@ export default {
             return;
           }
 
+          // Show payment dialog with offline data
           this.payment_dialog = true;
           this.payment_offline_mode = true;
           this.invoice_doc = data.invoice_data;
-          this.payments = data.invoice_data.payments || [];
           this.payment_grand_total = data.invoice_data.grand_total || 0;
-          this.payment_currency = data.invoice_data.currency || 'PKR';
+          this.payment_currency = data.invoice_data.currency || this.pos_profile.currency;
           this.selected_payment_mode = 'Cash';
-        } else {
-          // In online mode, show payment dialog first
-          this.payment_dialog = true;
-          this.payment_offline_mode = false;
-          this.invoice_doc = typeof data === 'object' ? data.invoice_doc : null;
           
-          // Validate invoice doc
-          if (!this.invoice_doc) {
+        } else {
+          // Handle online mode
+          if (!data.invoice_doc) {
             console.error('Invalid invoice doc in online mode');
             this.eventBus.emit("show_message", {
               title: __('Invalid invoice data'),
@@ -1853,26 +1850,31 @@ export default {
             return;
           }
 
-          // Initialize payments array if not present
+          // Show payment dialog with online data
+          this.payment_dialog = true;
+          this.payment_offline_mode = false;
+          this.invoice_doc = data.invoice_doc;
+          this.payment_grand_total = data.invoice_doc.grand_total || 0;
+          this.payment_currency = data.invoice_doc.currency || this.pos_profile.currency;
+          this.selected_payment_mode = 'Cash';
+
+          // Initialize payments array if needed
           if (!this.invoice_doc.payments) {
             this.invoice_doc.payments = [];
           }
 
-          this.payment_grand_total = this.invoice_doc.grand_total || 0;
-          this.payment_currency = this.invoice_doc.currency || 'PKR';
-          this.selected_payment_mode = 'Cash';
-
-          // Load addresses and sales persons in background
+          // Load additional data in background for online mode
           if (navigator.onLine) {
+            this.get_customer_info().catch(console.error);
             this.get_addresses().catch(console.error);
-            this.get_sales_person_names().catch(console.error);
           }
         }
+
       } catch (error) {
         console.error('Error in payment handling:', error);
-        this.eventBus.emit('show_message', {
+        this.eventBus.emit("show_message", {
           title: __('Error processing payment'),
-          color: 'error'
+          color: "error",
         });
       }
     });

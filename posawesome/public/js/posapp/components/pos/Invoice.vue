@@ -1676,91 +1676,51 @@ export default {
           return;
         }
 
-        const invoice_data = {
-          items_count: this.items.length,
-          customer: this.customer,
-          is_return: doc.is_return || false,
-          currency: this.selected_currency || this.pos_profile.currency,
-          grand_total: this.subtotal,
-          payments: doc.payments || [], // Ensure payments array exists
-          ...doc
-        };
-        
-        console.log('Invoice state before payment:', invoice_data);
-
         // Basic validations
-        if (!invoice_data.customer) {
+        if (!doc.customer) {
           this.showError('Select a customer');
           return;
         }
 
-        if (!invoice_data.items_count) {
-          this.showError('No items in invoice');
-          return;
-        }
-
-        console.log('Basic validations passed, proceeding to main validation');
+        // Check online/offline status
+        const isOnline = navigator.onLine;
         
-        // Skip online validations in offline mode
-        let isValid = true;
-        if (navigator.onLine) {
-          isValid = await this.validate();
-          console.log('Main validation result:', isValid);
-        }
-        
-        if (!isValid) {
-          return;
-        }
-
-        // Process based on invoice type
-        if (invoice_data.is_return) {
-          if (!navigator.onLine) {
-            this.showError('Return invoices cannot be processed offline');
+        if (!isOnline) {
+          // For offline mode, prepare offline data
+          const offlineData = {
+            offline: true,
+            invoice_data: {
+              ...doc,
+              items_count: this.items.length,
+              grand_total: this.subtotal,
+              currency: this.selected_currency || this.pos_profile.currency
+            }
+          };
+          
+          // Emit event for offline handling
+          this.eventBus.emit('show_payment', offlineData);
+          
+        } else {
+          // For online mode, update invoice first
+          const result = await this.update_invoice(doc);
+          
+          if (!result || !result.message) {
+            this.showError('Failed to update invoice');
             return;
           }
-          console.log('Processing return invoice');
-        
-        } else {
-          console.log('Processing regular invoice');
           
-          // Show payment dialog
-          console.log('Showing payment dialog with currency:', invoice_data.currency);
-          
-          if (!navigator.onLine) {
-            // For offline mode, prepare offline payment data
-            const payments = [{
-              mode_of_payment: 'Cash',
-              amount: invoice_data.grand_total,
-              currency: invoice_data.currency
-            }];
-            invoice_data.payments = payments;
-            
-            // Emit event with offline flag
-            this.eventBus.emit('show_payment', {
-              offline: true,
-              invoice_data: invoice_data
-            });
-          } else {
-            // For online mode, prepare invoice doc
-            this.invoice_doc = invoice_data;
-            const result = await this.process_invoice();
-            if (!result) {
-              this.showError('Failed to process invoice');
-              return;
-            }
-            
-            // Ensure payments array exists in result
-            if (!result.message.payments) {
-              result.message.payments = [];
-            }
-            
-            // Emit event with online data
-            this.eventBus.emit('show_payment', {
-              offline: false,
-              invoice_doc: result.message
-            });
+          // Ensure payments array exists
+          if (!result.message.payments) {
+            result.message.payments = [];
           }
+          
+          // Emit event with online data
+          this.eventBus.emit('show_payment', {
+            offline: false,
+            invoice_doc: result.message
+          });
         }
+        
       } catch (error) {
         console.error('Show payment error:', error);
         if (!navigator.onLine) {
