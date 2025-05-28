@@ -989,6 +989,30 @@ export default {
         items_count: data.items ? data.items.length : 0
       });
       
+      // Validate invoice data
+      if (!data) {
+        console.error('Invalid invoice data received');
+        this.eventBus.emit("show_message", {
+          title: __('Invalid invoice data'),
+          color: "error",
+        });
+        return;
+      }
+
+      // Initialize required properties if not present
+      if (!data.payments) {
+        data.payments = [];
+      }
+
+      if (!data.items) {
+        data.items = [];
+      }
+
+      // Ensure other required properties exist
+      data.is_return = data.is_return || false;
+      data.grand_total = data.grand_total || 0;
+      data.rounded_total = data.rounded_total || data.grand_total;
+      
       this.clear_invoice()
       if (data.is_return) {
         console.log("Processing return invoice");

@@ -204,9 +204,30 @@ export default {
     },
 
     submit_dialog() {
-
       if (this.selected.length > 0) {
-        this.eventBus.emit('load_invoice', this.selected[0]);
+        // Validate selected invoice data
+        const invoice = this.selected[0];
+        if (!invoice) {
+          this.showError('Invalid invoice data');
+          return;
+        }
+
+        // Initialize required properties if not present
+        if (!invoice.payments) {
+          invoice.payments = [];
+        }
+
+        if (!invoice.items) {
+          invoice.items = [];
+        }
+
+        // Ensure other required properties exist
+        invoice.is_return = invoice.is_return || false;
+        invoice.grand_total = invoice.grand_total || 0;
+        invoice.rounded_total = invoice.rounded_total || invoice.grand_total;
+
+        // Load the invoice
+        this.eventBus.emit('load_invoice', invoice);
         this.draftsDialog = false;
       }
       else {
