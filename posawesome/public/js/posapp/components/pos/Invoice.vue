@@ -1554,10 +1554,18 @@ export default {
             message: 'Invoice updated offline'
           };
         }
+        if (!invoice) {
+          throw new Error('No invoice data provided');
+        }
+        console.log('Updating invoice with data:', invoice);
         const result = await frappe.call({
           method: 'posawesome.posawesome.api.posapp.update_invoice',
-          args: { data: JSON.stringify(invoice) },  // Stringify the invoice data
+          args: { data: JSON.stringify(invoice) },
         });
+        if (!result || !result.message) {
+          throw new Error('Failed to update invoice: No response from server');
+        }
+        console.log('Invoice update result:', result);
         return result;
       } catch (error) {
         console.error('Update invoice error:', error);
@@ -1601,7 +1609,14 @@ export default {
             message: 'Invoice processed offline'
           };
         }
-        const result = await this.update_invoice(this.invoice);
+        const doc = this.get_invoice_doc();
+        if (!doc) {
+          throw new Error('No invoice data found');
+        }
+        const result = await this.update_invoice(doc);
+        if (!result || !result.message) {
+          throw new Error('Failed to update invoice');
+        }
         return result;
       } catch (error) {
         console.error('Process invoice error:', error);
@@ -1654,13 +1669,15 @@ export default {
       try {
         console.log('Starting show_payment process');
         
-        // Get current invoice data
+        // Get current invoice data using get_invoice_doc
+        const doc = this.get_invoice_doc();
         const invoice_data = {
           items_count: this.items.length,
           customer: this.customer,
-          is_return: this.invoice_doc ? this.invoice_doc.is_return : false,
+          is_return: doc.is_return || false,
           currency: this.selected_currency || this.pos_profile.currency,
-          grand_total: this.subtotal
+          grand_total: this.subtotal,
+          ...doc
         };
         
         console.log('Invoice state before payment:', invoice_data);
@@ -1696,7 +1713,7 @@ export default {
             return;
           }
           console.log('Processing return invoice');
-          await this.process_return();
+        
         } else {
           console.log('Processing regular invoice');
           
@@ -1719,8 +1736,9 @@ export default {
             });
           } else {
             // For online mode, prepare invoice doc
-            const invoice_doc = await this.process_invoice();
-            if (!invoice_doc) {
+            this.invoice_doc = invoice_data;
+            const result = await this.process_invoice();
+            if (!result) {
               this.showError('Failed to process invoice');
               return;
             }
@@ -1728,7 +1746,7 @@ export default {
             // Emit event with online data
             this.eventBus.emit('show_payment', {
               offline: false,
-              invoice_doc: invoice_doc
+              invoice_doc: result.message
             });
           }
         }
