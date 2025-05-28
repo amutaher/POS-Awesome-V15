@@ -824,6 +824,16 @@ def submit_invoice(invoice, data):
         data = json.loads(data)
         invoice = json.loads(invoice)
         
+        # Get POS Profile first
+        if not invoice.get("pos_profile"):
+            frappe.throw(_("POS Profile is required"))
+            
+        pos_profile = frappe.get_doc("POS Profile", invoice.get("pos_profile"))
+        
+        # Auto set company from POS Profile if not provided
+        if not invoice.get("company"):
+            invoice["company"] = pos_profile.company
+            
         # Check if invoice already exists and is submitted
         if invoice.get("name"):
             existing_invoice = frappe.get_doc("Sales Invoice", invoice.get("name"))
@@ -832,9 +842,6 @@ def submit_invoice(invoice, data):
                     _("Invoice {0} is already submitted").format(invoice.get("name")),
                     title=_("Invalid Action")
                 )
-        
-        # Get POS Profile
-        pos_profile = frappe.get_doc("POS Profile", invoice.get("pos_profile"))
         
         # Sanitize the invoice data
         sanitized_invoice = sanitize_invoice_data(invoice)
