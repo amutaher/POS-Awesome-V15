@@ -2318,6 +2318,13 @@ export default {
         item.amount = this.flt(item.qty * item.rate, this.currency_precision);
         item.base_amount = this.flt(item.qty * item.base_rate, this.currency_precision);
 
+        // Store original values before saving draft state
+        const original_rate = item.rate;
+        const original_base_rate = item.base_rate;
+        const original_discount_amount = item.discount_amount;
+        const original_base_discount_amount = item.base_discount_amount;
+        const original_discount_percentage = item.discount_percentage;
+
         // Save computed values to draft state
         this.save_item_draft_state(item, {
           rate: original_rate,
