@@ -277,8 +277,33 @@ export default {
         // Get selected invoice and initialize its data
         const invoice = this.initializeInvoiceData(this.selected[0]);
 
-        // Emit load_invoice event with initialized data
-        this.eventBus.emit('load_invoice', invoice);
+        // Check online/offline status
+        const isOnline = navigator.onLine;
+
+        if (!isOnline) {
+          // For offline mode, prepare offline data and show payment card
+          const offlineData = {
+            offline: true,
+            invoice_data: {
+              ...invoice,
+              items_count: invoice.items.length,
+              grand_total: invoice.grand_total,
+              currency: invoice.currency
+            }
+          };
+          
+          // Emit event for offline handling
+          this.eventBus.emit('show_payment_dialog', offlineData);
+          
+        } else {
+          // For online mode, show payments table
+          this.eventBus.emit('show_payments_table', {
+            offline: false,
+            invoice_doc: invoice
+          });
+        }
+
+        // Close drafts dialog
         this.draftsDialog = false;
         this.showSuccess('Invoice loaded successfully');
 
