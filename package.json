@@ -5,6 +5,7 @@
   "dependencies": {
     "lodash": "^4.17.21",
     "mitt": "^3.0.1",
+    "socket.io-client": "^4.8.1",
     "vue": "^3.3.4",
     "vuetify": "^3.7.5"
   },
@@ -16,7 +17,10 @@
     "eslint-plugin-vue": "^9.32.0",
     "eslint-plugin-vuetify": "^2.5.1",
     "globals": "^15.13.0",
+    "idb": "^8.0.3",
     "vite": "^6.2.4",
-    "vue": "^3.5.13"
+    "vite-plugin-pwa": "^1.0.0",
+    "vue": "^3.5.13",
+    "workbox-window": "^7.3.0"
   }
 }
