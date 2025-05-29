@@ -6,18 +6,27 @@ import * as components from 'vuetify/components'
 import * as directives from 'vuetify/directives'
 import Home from './Home.vue';
 
-// Register service worker
-const updateSW = registerSW({
-    onNeedRefresh() {
-        // Show a prompt to user about new version
-        if (confirm('New version available. Update?')) {
-            updateSW();
+// Register service worker with error handling
+try {
+    const updateSW = registerSW({
+        onNeedRefresh() {
+            if (confirm('New version available. Update?')) {
+                updateSW();
+            }
+        },
+        onOfflineReady() {
+            console.log('App ready to work offline');
+        },
+        onRegistered(r) {
+            console.log('Service Worker registered:', r);
+        },
+        onRegisterError(error) {
+            console.error('Service Worker registration failed:', error);
         }
-    },
-    onOfflineReady() {
-        console.log('App ready to work offline');
-    },
-});
+    });
+} catch (error) {
+    console.error('PWA registration failed:', error);
+}
 
 frappe.provide('frappe.PosApp');
 

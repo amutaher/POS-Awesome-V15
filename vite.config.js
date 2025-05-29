@@ -3,11 +3,17 @@ import vue from '@vitejs/plugin-vue'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
-  publicDir: 'posawesome/public',
+  build: {
+    outDir: 'dist',
+    rollupOptions: {
+      external: ['vue', 'vuetify'],
+    }
+  },
   plugins: [
     vue(),
     VitePWA({
       registerType: 'autoUpdate',
+      injectRegister: 'auto',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
       manifest: {
         name: 'POS Awesome',
