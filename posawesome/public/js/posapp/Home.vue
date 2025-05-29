@@ -42,7 +42,9 @@ export default {
     // Register service worker
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/service-worker.js')
+        navigator.serviceWorker.register('/app/posapp/service-worker.js', {
+          scope: '/app/posapp/'
+        })
           .then(registration => {
             console.log('ServiceWorker registration successful');
           })
