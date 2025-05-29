@@ -131,7 +131,8 @@ export default {
       networkOnline: navigator.onLine, // Boolean: Reflects the browser's current network connectivity (true if online, false if offline)
       serverOnline: false,             // Boolean: Reflects the real-time server health via WebSocket (true if connected, false if disconnected)
       serverConnecting: false,         // Boolean: Indicates if the client is currently attempting to establish a connection to the server via WebSocket
-      socket: null                     // Instance of the Socket.IO client, used for real-time communication with the server
+      socket: null,                    // Instance of the Socket.IO client, used for real-time communication with the server
+      networkType: null,               // String: Type of network connection (ethernet, wifi, etc.)
     };
   },
   computed: {
@@ -150,10 +151,15 @@ export default {
      * @returns {string} A Material Design Icon class string.
      */
     statusIcon() {
-      // Note: 'mdi-loading' is conceptually here, but `v-progress-circular` handles the visual loading state.
-      if (this.networkOnline && this.serverOnline) return 'mdi-wifi'; // Wi-Fi icon when connected to server
-      if (this.networkOnline && !this.serverOnline) return 'mdi-wifi-strength-alert-outline'; // Wi-Fi with alert for server offline
-      return 'mdi-wifi-off'; // Wi-Fi off icon when no internet connection
+      if (this.networkOnline && this.serverOnline) {
+        // Show ethernet icon if connected via ethernet, otherwise wifi
+        return this.networkType === 'ethernet' ? 'mdi-ethernet' : 'mdi-wifi';
+      }
+      if (this.networkOnline && !this.serverOnline) {
+        // Show appropriate warning icon based on connection type
+        return this.networkType === 'ethernet' ? 'mdi-ethernet-cable-off' : 'mdi-wifi-strength-alert-outline';
+      }
+      return this.networkType === 'ethernet' ? 'mdi-ethernet-cable-off' : 'mdi-wifi-off';
     },
     /**
      * Provides a descriptive text for the tooltip that appears when hovering over the status icon.
@@ -161,9 +167,11 @@ export default {
      * @returns {string} A localized status message.
      */
     statusText() {
-      if (this.serverConnecting) return this.__('Connecting to server...'); // Message when connecting
-      if (!this.networkOnline) return this.__('No Internet Connection'); // Message when no internet
-      return this.serverOnline ? this.__('Connected to Server') : this.__('Server Offline'); // Messages for server status
+      const connectionType = this.networkType === 'ethernet' ? this.__('Ethernet') : this.__('WiFi');
+      if (this.serverConnecting) return this.__('Connecting to server...'); 
+      if (!this.networkOnline) return this.__('No Internet Connection');
+      if (this.serverOnline) return this.__(`Connected to Server via ${connectionType}`);
+      return this.__('Server Offline');
     }
   },
   created() {
@@ -217,31 +225,51 @@ export default {
   },
   mounted() {
     // --- NETWORK ONLINE/OFFLINE EVENTS ---
-    // Attach event listeners to the window object to detect changes in the browser's network status.
-    window.addEventListener('online', this.handleOnline); // Fires when the browser regains network connectivity
-    window.addEventListener('offline', this.handleOffline); // Fires when the browser loses network connectivity
+    window.addEventListener('online', this.handleOnline);
+    window.addEventListener('offline', this.handleOffline);
+
+    // --- DETECT NETWORK TYPE ---
+    this.detectNetworkType();
+    // Watch for network type changes if the browser supports the Network Information API
+    if (navigator.connection) {
+      navigator.connection.addEventListener('change', this.detectNetworkType);
+    }
 
     // --- SOCKET CONNECTION FOR SERVER STATUS ---
-    // Initiates the WebSocket connection to monitor server health.
     this.initSocketConnection();
   },
   beforeDestroy() {
     // --- REMOVE NETWORK LISTENERS ---
-    // Crucial cleanup: Remove event listeners from the window to prevent memory leaks
-    // when the component is destroyed (e.g., navigating away from the page).
     window.removeEventListener('online', this.handleOnline);
     window.removeEventListener('offline', this.handleOffline);
+    
+    // Remove network type change listener
+    if (navigator.connection) {
+      navigator.connection.removeEventListener('change', this.detectNetworkType);
+    }
+
     // --- CLOSE SOCKET ---
-    // Disconnect and clean up Socket.IO listeners to ensure proper resource management.
     if (this.socket) {
-      this.socket.off('connect'); // Remove 'connect' listener
-      this.socket.off('disconnect'); // Remove 'disconnect' listener
-      this.socket.off('connect_error'); // Remove 'connect_error' listener
-      this.socket.close(); // Close the Socket.IO connection
-      this.socket = null; // Clear the socket instance to prevent stale references
+      this.socket.off('connect');
+      this.socket.off('disconnect');
+      this.socket.off('connect_error');
+      this.socket.close();
+      this.socket = null;
     }
   },
   methods: {
+    /**
+     * Detects the current type of network connection (ethernet, wifi, etc.)
+     */
+    detectNetworkType() {
+      if (navigator.connection) {
+        const connection = navigator.connection;
+        this.networkType = connection.type === 'ethernet' ? 'ethernet' : 'wifi';
+      } else {
+        // Default to wifi if Network Information API is not supported
+        this.networkType = 'wifi';
+      }
+    },
     /**
      * Initializes the Socket.IO connection to the backend server.
      * This method sets up the connection parameters and defines event listeners
