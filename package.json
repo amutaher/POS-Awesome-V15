@@ -1,8 +1,8 @@
 {
   "scripts": {
-    "dev": "vite",
-  "pwa": "vite build",
-  "build": "esbuild --production --apps posawesome --run-build-command && yarn pwa"
+    "dev": "vite",          // local HMR
+  "build": "vite build",  // PWA build only (desk bundle wrapper se ban chuka)
+  "pwa":   "vite build"   // optional alias if you want
   },
   "dependencies": {
     "lodash": "^4.17.21",
