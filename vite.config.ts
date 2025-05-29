@@ -4,6 +4,7 @@ import vue from '@vitejs/plugin-vue'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  base: '/app/posapp/',
   root: resolve(__dirname, 'posawesome', 'public', 'js', 'posapp'),
   plugins: [
     vue(),
@@ -13,7 +14,7 @@ export default defineConfig({
       manifest: {
         name: 'POSAwesome',
         short_name: 'POS',
-        start_url: '.',          // relative start
+        start_url: '/app/posapp/',          // relative start
         display: 'standalone',
         background_color: '#ffffff',
         theme_color: '#1E88E5',
