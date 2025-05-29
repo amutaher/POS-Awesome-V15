@@ -1,5 +1,3 @@
-import { registerSW } from 'virtual:pwa-register'
-registerSW({ immediate: true })
 import { createVuetify } from 'vuetify';
 import { createApp } from 'vue';
 import eventBus from './bus';
