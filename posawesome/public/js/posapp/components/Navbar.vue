@@ -276,50 +276,54 @@ export default {
      * for various connection states (connect, disconnect, error).
      */
     initSocketConnection() {
-      this.serverConnecting = true; // Set state to indicate connection attempt is in progress
-      this.serverOnline = false; // Assume server is offline until a successful connection is made
+      this.serverConnecting = true;
+      this.serverOnline = false;
 
       try {
-        // Determine the base URL for the socket connection.
-        const protocol = window.location.protocol; // e.g., 'http:', 'https:'
-        const host = window.location.hostname; // e.g., 'localhost', 'yourdomain.com'
-        // Get port from Frappe configuration or use default
-        const port = frappe.boot?.socketio_port || window.location.port || '9000';
+        const socketConfig = frappe?.boot?.socketio_port_config || {};
+        const host = window.location.hostname;
+        const port = socketConfig.port || window.location.port || '';
+        const useSecure = window.location.protocol === 'https:';
+        
+        // Construct the socket URL
+        let socketUrl = `${useSecure ? 'https:' : 'http:'}//${host}`;
+        if (port) {
+          socketUrl += `:${port}`;
+        }
 
-        this.socket = io(`${protocol}//${host}:${port}`, {
-          path: '/socket.io', // Standard path for Socket.IO connections
-          transports: ['websocket', 'polling'], // Preferred transport methods (websocket is faster)
-          reconnection: true, // Enable automatic reconnection attempts if connection is lost
-          reconnectionAttempts: Infinity, // Attempt to reconnect indefinitely
-          reconnectionDelay: 1000, // Initial delay before first reconnection attempt (1 second)
-          reconnectionDelayMax: 5000, // Maximum delay between reconnection attempts (5 seconds)
-          timeout: 20000 // How long to wait before considering the connection failed (20 seconds)
+        console.log('Connecting to socket URL:', socketUrl);
+
+        this.socket = io(socketUrl, {
+          path: '/socket.io',
+          transports: ['polling', 'websocket'], // Start with polling, then upgrade to websocket
+          secure: useSecure,
+          rejectUnauthorized: false,
+          reconnection: true,
+          reconnectionAttempts: Infinity,
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 5000,
+          timeout: 20000
         });
 
-        // Event listener for a successful connection to the Socket.IO server.
         this.socket.on('connect', () => {
-          this.serverOnline = true; // Update server status to online
-          this.serverConnecting = false; // Connection attempt is complete
+          this.serverOnline = true;
+          this.serverConnecting = false;
           console.log('Socket.IO: Connected to server');
         });
 
-        // Event listener for disconnection from the Socket.IO server.
         this.socket.on('disconnect', (reason) => {
-          this.serverOnline = false; // Update server status to offline
-          this.serverConnecting = false; // No longer connecting if disconnected
+          this.serverOnline = false;
+          this.serverConnecting = false;
           console.warn('Socket.IO: Disconnected from server. Reason:', reason);
-          // Socket.IO's `reconnection: true` handles automatic reconnection attempts.
         });
 
-        // Event listener for connection errors (e.g., server not found, refused connection).
         this.socket.on('connect_error', (error) => {
-          this.serverOnline = false; // Update server status to offline
-          this.serverConnecting = false; // No longer connecting if an error occurred
+          this.serverOnline = false;
+          this.serverConnecting = false;
           console.error('Socket.IO: Connection error:', error.message);
         });
 
       } catch (err) {
-        // Catch any errors during the initial Socket.IO client instantiation.
         this.serverOnline = false;
         this.serverConnecting = false;
         console.error('Failed to initialize Socket.IO connection:', err);
