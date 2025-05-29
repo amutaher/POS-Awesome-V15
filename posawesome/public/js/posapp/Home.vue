@@ -38,7 +38,20 @@ export default {
     this.remove_frappe_nav();
   },
   updated() { },
-  created: function () {
+  created() {
+    // Register service worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/service-worker.js')
+          .then(registration => {
+            console.log('ServiceWorker registration successful');
+          })
+          .catch(err => {
+            console.log('ServiceWorker registration failed: ', err);
+          });
+      });
+    }
+
     setTimeout(() => {
       this.remove_frappe_nav();
     }, 1000);
