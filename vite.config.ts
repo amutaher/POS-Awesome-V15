@@ -5,7 +5,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
   base: '/app/posapp/',
-  root: resolve(__dirname, 'posawesome', 'public', 'js', 'posapp'),
+  root: resolve(__dirname, 'public', 'js', 'posapp'),
   plugins: [
     vue(),
     VitePWA({
