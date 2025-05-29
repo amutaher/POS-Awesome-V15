@@ -1,17 +1,16 @@
 const path = require('path');
 const webpack = require('webpack');
-const VueLoaderPlugin = require('vue-loader/lib/plugin');
-const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 
 module.exports = {
     mode: 'production',
     entry: {
-        posawesome: './posawesome/public/js/posapp/index.js'
+        'posawesome': './posawesome/public/js/posapp/Home.vue',
+        'posawesome-vue': './posawesome/public/js/posawesome-vue.js'
     },
     output: {
         path: path.resolve(__dirname, 'posawesome/public/dist'),
-        filename: 'js/[name].min.js',
-        publicPath: '/assets/posawesome/dist/'
+        filename: '[name].min.js',
+        publicPath: '/assets/'
     },
     module: {
         rules: [
@@ -22,39 +21,25 @@ module.exports = {
             {
                 test: /\.js$/,
                 loader: 'babel-loader',
-                exclude: /node_modules/,
-                options: {
-                    presets: ['@babel/preset-env']
-                }
+                exclude: /node_modules/
             },
             {
                 test: /\.css$/,
-                use: [
-                    MiniCssExtractPlugin.loader,
-                    'css-loader'
-                ]
+                use: ['style-loader', 'css-loader']
             }
         ]
     },
     resolve: {
         extensions: ['.js', '.vue'],
         alias: {
-            'vue$': 'vue/dist/vue.esm.js',
-            '@': path.resolve(__dirname, 'posawesome/public/js/posapp')
+            'vue$': 'vue/dist/vue.esm.js'
         }
     },
     plugins: [
-        new VueLoaderPlugin(),
-        new MiniCssExtractPlugin({
-            filename: 'css/[name].min.css'
-        }),
         new webpack.DefinePlugin({
             'process.env': {
                 NODE_ENV: '"production"'
             }
         })
-    ],
-    optimization: {
-        minimize: true
-    }
+    ]
 }; 
