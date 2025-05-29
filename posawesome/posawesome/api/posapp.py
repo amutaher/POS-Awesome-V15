@@ -538,13 +538,16 @@ def validate_return_items(original_invoice_name, return_items):
     
 @frappe.whitelist()
 def update_invoice(data=None, invoice=None):
-    if not data and not invoice:
-        frappe.throw(_("No invoice data provided"))
-        
     try:
-        invoice_data = json.loads(data) if data else json.loads(invoice) if invoice else None
+        # Handle both data and invoice parameters
+        invoice_data = None
+        if data:
+            invoice_data = json.loads(data) if isinstance(data, str) else data
+        elif invoice:
+            invoice_data = json.loads(invoice) if isinstance(invoice, str) else invoice
+            
         if not invoice_data:
-            frappe.throw(_("Invalid invoice data format"))
+            frappe.throw(_("No invoice data provided"))
             
         if invoice_data.get("name"):
             invoice_doc = frappe.get_doc("Sales Invoice", invoice_data.get("name"))
@@ -577,9 +580,6 @@ def update_invoice(data=None, invoice=None):
                 # Update rates and amounts for all items using multiplication
                 for item in invoice_doc.items:
                     if item.price_list_rate:
-                        # If exchange rate is 285 PKR = 1 USD
-                        # To convert USD to PKR: multiply by exchange rate
-                        # Example: 0.35 USD * 285 = 100 PKR
                         item.base_price_list_rate = flt(item.price_list_rate * exchange_rate, item.precision("base_price_list_rate"))
                     if item.rate:
                         item.base_rate = flt(item.rate * exchange_rate, item.precision("base_rate"))
@@ -597,10 +597,6 @@ def update_invoice(data=None, invoice=None):
                 invoice_doc.base_rounded_total = flt(invoice_doc.rounded_total * exchange_rate, invoice_doc.precision("base_rounded_total"))
                 invoice_doc.base_in_words = money_in_words(invoice_doc.base_rounded_total, invoice_doc.company_currency)
 
-                # Update data to be sent back to frontend
-                data["conversion_rate"] = exchange_rate
-                data["plc_conversion_rate"] = exchange_rate
-
         invoice_doc.flags.ignore_permissions = True
         frappe.flags.ignore_account_permission = True
         invoice_doc.docstatus = 0
@@ -611,9 +607,12 @@ def update_invoice(data=None, invoice=None):
         response["conversion_rate"] = invoice_doc.conversion_rate
         response["plc_conversion_rate"] = invoice_doc.conversion_rate
         return response
+        
+    except json.JSONDecodeError:
+        frappe.throw(_("Invalid JSON data provided"))
     except Exception as e:
         frappe.log_error(f"Error updating invoice: {str(e)}", "POS Awesome")
-        return {"error": str(e)}
+        frappe.throw(_("Error updating invoice: {0}").format(str(e)))
 
 
 @frappe.whitelist()
