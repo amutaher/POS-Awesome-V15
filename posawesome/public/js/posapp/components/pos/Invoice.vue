@@ -439,7 +439,6 @@
 
 import format from "../../format";
 import Customer from "./Customer.vue";
-import { PosOfflineStore } from './PosOfflineStore';
 
 export default {
   mixins: [format],
@@ -496,8 +495,6 @@ export default {
       selected_currency: "", // Currently selected currency
       exchange_rate: 1, // Current exchange rate
       available_currencies: [], // List of available currencies
-      offlineStore: null,
-      isOnline: navigator.onLine,
     };
   },
 
@@ -951,19 +948,6 @@ export default {
       });
       
       this.clear_invoice()
-
-      // Try to load from offline store first if offline
-      if (!this.isOnline && data.name) {
-        try {
-          const offlineInvoice = await this.offlineStore.getInvoice(data.name);
-          if (offlineInvoice) {
-            data = offlineInvoice;
-          }
-        } catch (error) {
-          console.error('Error loading offline invoice:', error);
-        }
-      }
-
       if (data.is_return) {
         console.log("Processing return invoice");
         // For return without invoice case, check if there's a return_against
@@ -1576,32 +1560,12 @@ export default {
     },
 
     // Process and save invoice (handles update or create)
-    async process_invoice() {
+    process_invoice() {
       const doc = this.get_invoice_doc();
-      
-      if (!this.isOnline) {
-        try {
-          // Generate a temporary offline ID if new invoice
-          if (!doc.name) {
-            doc.name = 'OFF-' + new Date().getTime();
-          }
-          await this.offlineStore.saveInvoice(doc);
-          this.clear_invoice();
-          return doc;
-        } catch (error) {
-          console.error('Error saving offline invoice:', error);
-          this.eventBus.emit('show_message', {
-            title: __('Error saving offline invoice'),
-            color: 'error'
-          });
-          return false;
-        }
-      }
-
-      // Online mode - existing code
       if (doc.name) {
         try {
-          const updated_doc = await this.update_invoice(doc);
+          const updated_doc = this.update_invoice(doc);
+          // Update posting date after invoice update
           if (updated_doc && updated_doc.posting_date) {
             this.posting_date = updated_doc.posting_date;
           }
@@ -1616,7 +1580,8 @@ export default {
         }
       } else {
         try {
-          const updated_doc = await this.update_invoice(doc);
+          const updated_doc = this.update_invoice(doc);
+          // Update posting date after invoice creation
           if (updated_doc && updated_doc.posting_date) {
             this.posting_date = updated_doc.posting_date;
           }
@@ -1688,7 +1653,7 @@ export default {
           invoice_doc = await this.process_invoice_from_order();
         } else {
           console.log('Processing regular invoice');
-          invoice_doc = await this.process_invoice();
+          invoice_doc = this.process_invoice();
         }
 
         if (!invoice_doc) {
@@ -4145,176 +4110,6 @@ export default {
       this.calc_stock_qty(item, item.qty);
       this.$forceUpdate();
     },
-
-    updateOnlineStatus() {
-      this.isOnline = navigator.onLine;
-      if (this.isOnline) {
-        this.syncOfflineData();
-      }
-    },
-
-    async syncOfflineData() {
-      try {
-        const unsynced = await this.offlineStore.getUnsynedInvoices();
-        for (const invoice of unsynced) {
-          try {
-            await this.submitInvoiceToServer(invoice);
-            await this.offlineStore.markInvoiceAsSynced(invoice.name);
-          } catch (error) {
-            console.error('Error syncing invoice:', error);
-          }
-        }
-      } catch (error) {
-        console.error('Error in sync process:', error);
-      }
-    },
-
-    async process_invoice() {
-      const doc = this.get_invoice_doc();
-      
-      if (!this.isOnline) {
-        try {
-          // Generate a temporary offline ID if new invoice
-          if (!doc.name) {
-            doc.name = 'OFF-' + new Date().getTime();
-          }
-          await this.offlineStore.saveInvoice(doc);
-          this.clear_invoice();
-          return doc;
-        } catch (error) {
-          console.error('Error saving offline invoice:', error);
-          this.eventBus.emit('show_message', {
-            title: __('Error saving offline invoice'),
-            color: 'error'
-          });
-          return false;
-        }
-      }
-
-      // Online mode - existing code
-      if (doc.name) {
-        try {
-          const updated_doc = await this.update_invoice(doc);
-          if (updated_doc && updated_doc.posting_date) {
-            this.posting_date = updated_doc.posting_date;
-          }
-          return updated_doc;
-        } catch (error) {
-          console.error('Error in process_invoice:', error);
-          this.eventBus.emit('show_message', {
-            title: __(error.message || 'Error processing invoice'),
-            color: 'error'
-          });
-          return false;
-        }
-      } else {
-        try {
-          const updated_doc = await this.update_invoice(doc);
-          if (updated_doc && updated_doc.posting_date) {
-            this.posting_date = updated_doc.posting_date;
-          }
-          return updated_doc;
-        } catch (error) {
-          console.error('Error in process_invoice:', error);
-          this.eventBus.emit('show_message', {
-            title: __(error.message || 'Error processing invoice'),
-            color: 'error'
-          });
-          return false;
-        }
-      }
-    },
-
-    async load_invoice(data = {}) {
-      console.log("load_invoice called with data:", {
-        is_return: data.is_return,
-        return_against: data.return_against,
-        customer: data.customer,
-        items_count: data.items ? data.items.length : 0
-      });
-      
-      this.clear_invoice();
-
-      // Try to load from offline store first if offline
-      if (!this.isOnline && data.name) {
-        try {
-          const offlineInvoice = await this.offlineStore.getInvoice(data.name);
-          if (offlineInvoice) {
-            data = offlineInvoice;
-          }
-        } catch (error) {
-          console.error('Error loading offline invoice:', error);
-        }
-      }
-
-      if (data.is_return) {
-        console.log("Processing return invoice");
-        if (data.return_against) {
-          console.log("Return has reference to invoice:", data.return_against);
-          this.eventBus.emit("set_customer_readonly", true);
-        } else {
-          console.log("Return without invoice reference, customer can be selected");
-          this.eventBus.emit("set_customer_readonly", false);
-        }
-        this.invoiceType = "Return";
-        this.invoiceTypes = ["Return"];
-      }
-      
-      this.invoice_doc = data;
-      this.items = data.items || [];
-      console.log("Items set:", this.items.length, "items");
-      
-      if (this.items.length > 0) {
-        this.update_items_details(this.items);
-        this.posa_offers = data.posa_offers || [];
-        this.items.forEach((item) => {
-          if (!item.posa_row_id) {
-            item.posa_row_id = this.makeid(20);
-          }
-          if (item.batch_no) {
-            this.set_batch_qty(item, item.batch_no);
-          }
-        });
-      } else {
-        console.log("Warning: No items in return invoice");
-      }
-      
-      this.customer = data.customer;
-      this.posting_date = data.posting_date || frappe.datetime.nowdate();
-      this.discount_amount = data.discount_amount;
-      this.additional_discount_percentage = data.additional_discount_percentage;
-        
-      if (this.items.length > 0) {
-        this.items.forEach((item) => {
-          if (item.serial_no) {
-            item.serial_no_selected = [];
-            const serial_list = item.serial_no.split("\n");
-            serial_list.forEach((element) => {
-              if (element.length) {
-                item.serial_no_selected.push(element);
-              }
-            });
-            item.serial_no_selected_count = item.serial_no_selected.length;
-          }
-        });
-      }
-      
-      if (data.is_return) {
-        console.log("Setting return values for discounts");
-        this.discount_amount = -data.discount_amount;
-        this.additional_discount_percentage = -data.additional_discount_percentage;
-        this.return_doc = data;
-      } else {
-        this.eventBus.emit("set_pos_coupons", data.posa_coupons);
-      }
-      
-      console.log("load_invoice completed, invoice state:", {
-        invoiceType: this.invoiceType,
-        is_return: this.invoice_doc.is_return,
-        items: this.items.length,
-        customer: this.customer
-      });
-    },
   },
 
   mounted() {
@@ -4432,9 +4227,6 @@ export default {
     this.eventBus.on("reset_posting_date", () => {
       this.posting_date = frappe.datetime.nowdate();
     });
-    this.offlineStore = new PosOfflineStore();
-    window.addEventListener('online', this.updateOnlineStatus);
-    window.addEventListener('offline', this.updateOnlineStatus);
   },
   // Cleanup event listeners before component is destroyed
   beforeUnmount() {
@@ -4446,8 +4238,6 @@ export default {
     this.eventBus.off("clear_invoice");
     // Cleanup reset_posting_date listener
     this.eventBus.off("reset_posting_date");
-    window.removeEventListener('online', this.updateOnlineStatus);
-    window.removeEventListener('offline', this.updateOnlineStatus);
   },
   // Register global keyboard shortcuts when component is created
   created() {
@@ -4455,9 +4245,6 @@ export default {
     document.addEventListener("keydown", this.shortDeleteFirstItem.bind(this));
     document.addEventListener("keydown", this.shortOpenFirstItem.bind(this));
     document.addEventListener("keydown", this.shortSelectDiscount.bind(this));
-    this.offlineStore = new PosOfflineStore();
-    window.addEventListener('online', this.updateOnlineStatus);
-    window.addEventListener('offline', this.updateOnlineStatus);
   },
   // Remove global keyboard shortcuts when component is unmounted
   unmounted() {
