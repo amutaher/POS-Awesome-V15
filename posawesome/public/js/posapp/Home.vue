@@ -38,7 +38,22 @@ export default {
     this.remove_frappe_nav();
   },
   updated() { },
-  created: function () {
+  created() {
+    // Register service worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/app/posapp/service-worker.js', {
+          scope: '/app/posapp/'
+        })
+          .then(registration => {
+            console.log('ServiceWorker registration successful');
+          })
+          .catch(err => {
+            console.log('ServiceWorker registration failed: ', err);
+          });
+      });
+    }
+
     setTimeout(() => {
       this.remove_frappe_nav();
     }, 1000);

@@ -17,8 +17,12 @@ app_license = "GPLv3"
 # include js, css files in header of desk.html
 # app_include_css = "/assets/posawesome/css/posawesome.css"
 # app_include_js = "/assets/posawesome/js/posawesome.js"
+app_include_css = [
+    "/assets/posawesome/dist/css/posawesome.min.css"
+]
+
 app_include_js = [
-    "posawesome.bundle.js",
+    "/assets/posawesome/dist/js/posawesome.min.js"
 ]
 
 # include js, css files in header of web template
@@ -277,4 +281,9 @@ fixtures = [
             ]
         ]
     }
+]
+
+website_route_rules = [
+    {"from_route": "/app/posapp/service-worker.js", "to_route": "posawesome/api/offline.service_worker"},
+    {"from_route": "/app/posapp/offline", "to_route": "posawesome/api/offline.offline_page"}
 ]
