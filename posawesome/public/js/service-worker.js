@@ -1,14 +1,13 @@
 const CACHE_NAME = 'posawesome-offline-v1';
 const OFFLINE_URL = '/app/posapp/offline';
-const BASE_URL = '/app/posapp';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll([
         OFFLINE_URL,
-        `${BASE_URL}/assets/js/posapp.min.js`,
-        `${BASE_URL}/assets/css/posapp.min.css`,
+        '/app/posapp/assets/js/posapp.min.js',
+        '/app/posapp/assets/css/posapp.min.css',
       ]);
     })
   );
@@ -27,10 +26,6 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Only handle GET requests
-  if (event.request.method !== 'GET') return;
-
-  // Handle navigation requests
   if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request).catch(() => {
@@ -40,22 +35,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Handle API requests
-  if (event.request.url.includes('/api/')) {
-    event.respondWith(
-      fetch(event.request).catch(() => {
-        return new Response(JSON.stringify({
-          offline: true,
-          message: 'No internet connection'
-        }), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-      })
-    );
-    return;
-  }
-
-  // Handle static assets
   event.respondWith(
     caches.match(event.request).then((response) => {
       if (response) {

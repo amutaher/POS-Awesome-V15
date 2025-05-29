@@ -1,22 +1,20 @@
 import os
 import frappe
 from frappe.website.utils import get_home_page
-from frappe.utils.response import build_response
 
-@frappe.whitelist(allow_guest=True)
-def service_worker():
+def get_context(context):
+    if frappe.local.request.path == "/app/posapp/offline":
+        context.no_cache = 1
+        context.template = "templates/offline.html"
+        return context
+    
+    if frappe.local.request.path == "/app/posapp/service-worker.js":
+        frappe.local.response.filename = "service-worker.js"
+        frappe.local.response.filecontent = get_service_worker_content()
+        frappe.local.response.type = "text/javascript"
+        return context
+
+def get_service_worker_content():
     sw_path = frappe.get_app_path("posawesome", "public", "js", "service-worker.js")
     with open(sw_path, "r") as f:
-        content = f.read()
-    
-    frappe.response.headers["Content-Type"] = "application/javascript"
-    frappe.response.headers["Service-Worker-Allowed"] = "/app/posapp/"
-    return content
-
-@frappe.whitelist(allow_guest=True)
-def offline_page():
-    template = frappe.get_template("templates/offline.html")
-    html = template.render()
-    
-    frappe.response.headers["Content-Type"] = "text/html"
-    return html 
+        return f.read() 
