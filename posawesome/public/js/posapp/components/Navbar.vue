@@ -253,11 +253,10 @@ export default {
 
       try {
         // Determine the base URL for the socket connection.
-        // The port '9000' is a common default for Socket.IO servers, but it MUST be adjusted
-        // to the actual port your backend's WebSocket server is listening on.
         const protocol = window.location.protocol; // e.g., 'http:', 'https:'
         const host = window.location.hostname; // e.g., 'localhost', 'yourdomain.com'
-        const port = '9000'; // IMPORTANT: Configure this to your actual Socket.IO server port!
+        // Get port from Frappe configuration or use default
+        const port = frappe.boot?.socketio_port || window.location.port || '9000';
 
         this.socket = io(`${protocol}//${host}:${port}`, {
           path: '/socket.io', // Standard path for Socket.IO connections
