@@ -6,57 +6,57 @@ frappe.pages['posapp'].on_page_load = function (wrapper) {
 		single_column: true
 	});
 
-	// Load required CSS
-	frappe.require([
-		'/assets/css/posawesome.min.css',
-		'https://cdn.jsdelivr.net/npm/vuetify@2.x/dist/vuetify.min.css',
-		'https://cdn.jsdelivr.net/npm/@mdi/font@6.x/css/materialdesignicons.min.css',
-		'https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900'
-	], () => {
-		// Initialize Vue app after CSS is loaded
-		frappe.require([
-			'/assets/js/posawesome-vue.min.js'
-		], () => {
-			if (!frappe.PosApp) {
-				frappe.throw(__('POS Awesome Vue components not loaded. Please check your installation.'));
+	this.page.$PosApp = new frappe.PosApp.posapp(this.page);
+
+	$('div.navbar-fixed-top').find('.container').css('padding', '0');
+
+	$("head").append("<link href='/assets/posawesome/node_modules/vuetify/dist/vuetify.min.css' rel='stylesheet'>");
+	$("head").append("<link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/@mdi/font@6.x/css/materialdesignicons.min.css'>");
+	$("head").append("<link rel='stylesheet' href='https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900' />");
+	
+	// Listen for POS Profile registration
+	frappe.realtime.on('pos_profile_registered', () => {
+		const update_totals_based_on_tax_inclusive = () => {
+			console.log("Updating totals based on tax inclusive settings");
+			const posProfile = this.page.$PosApp.pos_profile;
+
+			if (!posProfile) {
+				console.error("POS Profile is not set.");
 				return;
 			}
-			
-			try {
-				this.page.$PosApp = new frappe.PosApp.posapp(this.page);
-				
-				// Remove padding from navbar
-				$('div.navbar-fixed-top').find('.container').css('padding', '0');
-				
-				// Listen for POS Profile registration
-				frappe.realtime.on('pos_profile_registered', () => {
-					if (!this.page.$PosApp || !this.page.$PosApp.pos_profile) {
-						return;
-					}
 
-					frappe.call({
-						method: 'frappe.client.get_value',
-						args: {
-							doctype: 'POS Profile',
-							filters: { name: this.page.$PosApp.pos_profile },
-							fieldname: 'posa_tax_inclusive'
-						},
-						callback: (response) => {
-							if (response.message && response.message.posa_tax_inclusive) {
-								const totalAmountField = document.getElementById('input-v-25');
-								const grandTotalField = document.getElementById('input-v-29');
-								
-								if (totalAmountField && grandTotalField) {
-									totalAmountField.value = grandTotalField.value;
-								}
+			frappe.call({
+				method: 'frappe.get_cached_value',
+				args: {
+					doctype: 'POS Profile',
+					name: posProfile,
+					fieldname: 'posa_tax_inclusive'
+				},
+				callback: function(response) {
+					if (response.message !== undefined) {
+						const posa_tax_inclusive = response.message;
+						const totalAmountField = document.getElementById('input-v-25');
+						const grandTotalField = document.getElementById('input-v-29');
+
+						if (totalAmountField && grandTotalField) {
+							if (posa_tax_inclusive) {
+								totalAmountField.value = grandTotalField.value;
+								console.log("Total amount copied from grand total:", grandTotalField.value);
+							} else {
+								totalAmountField.value = "";
+								console.log("Total amount cleared because checkbox is unchecked.");
 							}
+						} else {
+							console.error('Could not find total amount or grand total field by ID.');
 						}
-					});
-				});
-			} catch (error) {
-				frappe.throw(__('Error initializing POS Awesome: ' + error.message));
-			}
-		});
+					} else {
+						console.error('Error fetching POS Profile or POS Profile not found.');
+					}
+				}
+			});
+		};
+
+		update_totals_based_on_tax_inclusive();
 	});
 };
 
