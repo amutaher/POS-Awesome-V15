@@ -537,8 +537,8 @@ def validate_return_items(original_invoice_name, return_items):
     return {"valid": True}
     
 @frappe.whitelist()
-def update_invoice(data):
-    data = json.loads(data)
+def update_invoice(data=None, invoice=None):
+    data = json.loads(data or invoice)
     if data.get("name"):
         invoice_doc = frappe.get_doc("Sales Invoice", data.get("name"))
         invoice_doc.update(data)
