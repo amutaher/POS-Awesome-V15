@@ -1,11 +1,10 @@
-// vite.config.ts
 import { resolve } from 'path'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
-    root: resolve(__dirname, 'posawesome', 'public', 'js', 'posapp'),
+  root: resolve(__dirname, 'posawesome', 'public', 'js', 'posapp'),
   plugins: [
     vue(),
     VitePWA({
@@ -14,7 +13,7 @@ export default defineConfig({
       manifest: {
         name: 'POSAwesome',
         short_name: 'POS',
-        start_url: '.',
+        start_url: '.',          // relative start
         display: 'standalone',
         background_color: '#ffffff',
         theme_color: '#1E88E5',
@@ -25,28 +24,32 @@ export default defineConfig({
       },
       workbox: {
         runtimeCaching: [
+          /* static assets */
           {
-            // Static JS/CSS
-            urlPattern: ({ request }) =>
-              request.destination === 'script' || request.destination === 'style',
+            urlPattern: ({request}) =>
+              ['script', 'style'].includes(request.destination),
             handler: 'CacheFirst',
             options: { cacheName: 'static-v1' }
           },
+          /* ERPNext GET APIs – current origin only */
           {
-            // ERPNext GET APIs
-            urlPattern: /^https:\/\/erp\.hamrooqcosmo\.com\/api\/resource\//,
+            urlPattern: ({url}) =>
+              url.origin === self.location.origin &&            // ⚡ dynamic
+              url.pathname.startsWith('/api/resource/'),
             handler: 'StaleWhileRevalidate',
             options: { cacheName: 'erp-api' }
           },
+          /* Invoice POST queue – current origin only */
           {
-            // Invoice POST queue
-            urlPattern: /^https:\/\/erp\.hamrooqcosmo\.com\/api\/method\/posawesome/,
-            method: 'POST',
+            urlPattern: ({url, request}) =>
+              url.origin === self.location.origin &&
+              request.method === 'POST' &&
+              url.pathname.startsWith('/api/method/posawesome'),
             handler: 'NetworkOnly',
             options: {
               backgroundSync: {
                 name: 'invoice-queue',
-                options: { maxRetentionTime: 24 * 60 } // minutes
+                options: { maxRetentionTime: 24 * 60 }
               }
             }
           }
