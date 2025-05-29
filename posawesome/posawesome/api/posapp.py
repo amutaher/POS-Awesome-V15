@@ -32,7 +32,6 @@ from posawesome.posawesome.doctype.delivery_charges.delivery_charges import (
 )
 from frappe.utils.caching import redis_cache
 from typing import List, Dict
-import time
 
 
 @frappe.whitelist()
@@ -539,523 +538,191 @@ def validate_return_items(original_invoice_name, return_items):
     
 @frappe.whitelist()
 def update_invoice(data):
-    try:
-        if not data:
-            frappe.throw(_("No data provided"))
-            
-        data = json.loads(data)
-        if not data:
-            frappe.throw(_("Invalid data format"))
-            
-        if data.get("name"):
-            invoice_doc = frappe.get_doc("Sales Invoice", data.get("name"))
-            invoice_doc.update(data)
-        else:
-            invoice_doc = frappe.get_doc(data)
+    data = json.loads(data)
+    if data.get("name"):
+        invoice_doc = frappe.get_doc("Sales Invoice", data.get("name"))
+        invoice_doc.update(data)
+    else:
+        invoice_doc = frappe.get_doc(data)
 
-        # Set currency from data before set_missing_values
-        selected_currency = data.get("currency")
-        
-        # Set missing values first
-        invoice_doc.set_missing_values()
-        
-        # Ensure selected currency is preserved after set_missing_values
-        if selected_currency:
-            invoice_doc.currency = selected_currency
-            # Get default conversion rate from ERPNext if currency is different from company currency
-            if invoice_doc.currency != frappe.get_cached_value("Company", invoice_doc.company, "default_currency"):
-                company_currency = frappe.get_cached_value("Company", invoice_doc.company, "default_currency")
-                # Get exchange rate from selected currency to base currency
-                exchange_rate = get_exchange_rate(
-                    invoice_doc.currency,
-                    company_currency,
-                    invoice_doc.posting_date
-                )
-                invoice_doc.conversion_rate = exchange_rate
-                invoice_doc.plc_conversion_rate = exchange_rate
-                invoice_doc.price_list_currency = selected_currency
+    # Set currency from data before set_missing_values
+    selected_currency = data.get("currency")
+    
+    # Set missing values first
+    invoice_doc.set_missing_values()
+    
+    # Ensure selected currency is preserved after set_missing_values
+    if selected_currency:
+        invoice_doc.currency = selected_currency
+        # Get default conversion rate from ERPNext if currency is different from company currency
+        if invoice_doc.currency != frappe.get_cached_value("Company", invoice_doc.company, "default_currency"):
+            company_currency = frappe.get_cached_value("Company", invoice_doc.company, "default_currency")
+            # Get exchange rate from selected currency to base currency
+            exchange_rate = get_exchange_rate(
+                invoice_doc.currency,
+                company_currency,
+                invoice_doc.posting_date
+            )
+            invoice_doc.conversion_rate = exchange_rate
+            invoice_doc.plc_conversion_rate = exchange_rate
+            invoice_doc.price_list_currency = selected_currency
 
-                # Update rates and amounts for all items using multiplication
-                for item in invoice_doc.items:
-                    if item.price_list_rate:
-                        # If exchange rate is 285 PKR = 1 USD
-                        # To convert USD to PKR: multiply by exchange rate
-                        # Example: 0.35 USD * 285 = 100 PKR
-                        item.base_price_list_rate = flt(item.price_list_rate * exchange_rate, item.precision("base_price_list_rate"))
-                    if item.rate:
-                        item.base_rate = flt(item.rate * exchange_rate, item.precision("base_rate"))
-                    if item.amount:
-                        item.base_amount = flt(item.amount * exchange_rate, item.precision("base_amount"))
+            # Update rates and amounts for all items using multiplication
+            for item in invoice_doc.items:
+                if item.price_list_rate:
+                    # If exchange rate is 285 PKR = 1 USD
+                    # To convert USD to PKR: multiply by exchange rate
+                    # Example: 0.35 USD * 285 = 100 PKR
+                    item.base_price_list_rate = flt(item.price_list_rate * exchange_rate, item.precision("base_price_list_rate"))
+                if item.rate:
+                    item.base_rate = flt(item.rate * exchange_rate, item.precision("base_rate"))
+                if item.amount:
+                    item.base_amount = flt(item.amount * exchange_rate, item.precision("base_amount"))
 
-                # Update payment amounts
-                for payment in invoice_doc.payments:
-                    payment.base_amount = flt(payment.amount * exchange_rate, payment.precision("base_amount"))
+            # Update payment amounts
+            for payment in invoice_doc.payments:
+                payment.base_amount = flt(payment.amount * exchange_rate, payment.precision("base_amount"))
 
-                # Update invoice level amounts
-                invoice_doc.base_total = flt(invoice_doc.total * exchange_rate, invoice_doc.precision("base_total"))
-                invoice_doc.base_net_total = flt(invoice_doc.net_total * exchange_rate, invoice_doc.precision("base_net_total"))
-                invoice_doc.base_grand_total = flt(invoice_doc.grand_total * exchange_rate, invoice_doc.precision("base_grand_total"))
-                invoice_doc.base_rounded_total = flt(invoice_doc.rounded_total * exchange_rate, invoice_doc.precision("base_rounded_total"))
-                invoice_doc.base_in_words = money_in_words(invoice_doc.base_rounded_total, invoice_doc.company_currency)
+            # Update invoice level amounts
+            invoice_doc.base_total = flt(invoice_doc.total * exchange_rate, invoice_doc.precision("base_total"))
+            invoice_doc.base_net_total = flt(invoice_doc.net_total * exchange_rate, invoice_doc.precision("base_net_total"))
+            invoice_doc.base_grand_total = flt(invoice_doc.grand_total * exchange_rate, invoice_doc.precision("base_grand_total"))
+            invoice_doc.base_rounded_total = flt(invoice_doc.rounded_total * exchange_rate, invoice_doc.precision("base_rounded_total"))
+            invoice_doc.base_in_words = money_in_words(invoice_doc.base_rounded_total, invoice_doc.company_currency)
 
-                # Update data to be sent back to frontend
-                data["conversion_rate"] = exchange_rate
-                data["plc_conversion_rate"] = exchange_rate
+            # Update data to be sent back to frontend
+            data["conversion_rate"] = exchange_rate
+            data["plc_conversion_rate"] = exchange_rate
 
-        invoice_doc.flags.ignore_permissions = True
-        frappe.flags.ignore_account_permission = True
-        invoice_doc.docstatus = 0
-        invoice_doc.save()
+    invoice_doc.flags.ignore_permissions = True
+    frappe.flags.ignore_account_permission = True
+    invoice_doc.docstatus = 0
+    invoice_doc.save()
 
-        # Return both the invoice doc and the updated data
-        response = invoice_doc.as_dict()
-        response["conversion_rate"] = invoice_doc.conversion_rate
-        response["plc_conversion_rate"] = invoice_doc.conversion_rate
-        return response
-        
-    except Exception as e:
-        frappe.log_error(frappe.get_traceback(), _("Failed to update invoice"))
-        frappe.throw(_("Failed to update invoice: {0}").format(str(e)))
+    # Return both the invoice doc and the updated data
+    response = invoice_doc.as_dict()
+    response["conversion_rate"] = invoice_doc.conversion_rate
+    response["plc_conversion_rate"] = invoice_doc.conversion_rate
+    return response
 
-
-def sanitize_invoice_data(invoice_data):
-    """Sanitize and whitelist invoice fields"""
-    # Define whitelisted fields that can be updated from frontend
-    whitelisted_fields = {
-        # Basic invoice fields
-        'doctype': str,
-        'company': str,  # Add company field explicitly
-        'customer': str,
-        'posting_date': str,
-        'due_date': str,
-        'currency': str,
-        'conversion_rate': float,
-        'selling_price_list': str,
-        'price_list_currency': str,
-        'plc_conversion_rate': float,
-        'ignore_pricing_rule': int,
-        'update_stock': int,
-        'total': float,
-        'grand_total': float,
-        'base_grand_total': float,
-        'rounding_adjustment': float,
-        'rounded_total': float,
-        'base_rounded_total': float,
-        'in_words': str,
-        'base_in_words': str,
-        'redeem_loyalty_points': int,
-        'loyalty_points': int,
-        'loyalty_amount': float,
-        'pos_profile': str,
-        'remarks': str,
-        
-        # POS specific fields
-        'is_pos': int,
-        'redeemed_customer_credit': float,
-        'credit_change': float,
-        'total_change': float,
-        'paid_change': float,
-        'posa_delivery_date': str,
-        'posa_notes': str,
-        'posa_pos_opening_shift': str,
-        'posa_is_printed': int,
-    }
-    
-    # Define whitelisted fields for child tables
-    whitelisted_child_fields = {
-        'items': {
-            'item_code': str,
-            'item_name': str,
-            'description': str,
-            'qty': float,
-            'stock_qty': float,
-            'rate': float,
-            'amount': float,
-            'base_rate': float,
-            'base_amount': float,
-            'price_list_rate': float,
-            'discount_percentage': float,
-            'discount_amount': float,
-            'stock_uom': str,
-            'uom': str,
-            'conversion_factor': float,
-            'warehouse': str,
-            'batch_no': str,
-            'serial_no': str,
-            'sales_order': str,
-            'so_detail': str,
-            'actual_batch_qty': float,
-            'actual_qty': float,
-        },
-        'payments': {
-            'mode_of_payment': str,
-            'amount': float,
-            'base_amount': float,
-            'account': str,
-            'type': str,
-            'default': int,
-        },
-        'taxes': {
-            'charge_type': str,
-            'account_head': str,
-            'description': str,
-            'rate': float,
-            'tax_amount': float,
-            'total': float,
-            'base_tax_amount': float,
-            'base_total': float,
-        }
-    }
-    
-    sanitized = {}
-    
-    # Sanitize main fields
-    for field, field_type in whitelisted_fields.items():
-        if field in invoice_data:
-            try:
-                sanitized[field] = field_type(invoice_data[field]) if invoice_data[field] is not None else None
-            except (ValueError, TypeError):
-                frappe.throw(_("Invalid value for field {0}").format(field))
-    
-    # Ensure company is set
-    if not sanitized.get("company") and invoice_data.get("company"):
-        sanitized["company"] = str(invoice_data["company"])
-    
-    # Sanitize child tables
-    for table, fields in whitelisted_child_fields.items():
-        if table in invoice_data:
-            sanitized[table] = []
-            for row in invoice_data[table]:
-                sanitized_row = {}
-                for field, field_type in fields.items():
-                    if field in row:
-                        try:
-                            sanitized_row[field] = field_type(row[field]) if row[field] is not None else None
-                        except (ValueError, TypeError):
-                            frappe.throw(_("Invalid value for field {0} in {1}").format(field, table))
-                if sanitized_row:
-                    sanitized[table].append(sanitized_row)
-    
-    return sanitized
-
-def generate_invoice_summary(invoice_doc):
-    """Generate structured summary of invoice items and totals"""
-    summary = {
-        'timestamp': frappe.utils.now(),
-        'invoice_items': [],
-        'totals': {
-            'subtotal': 0,
-            'discount_total': 0,
-            'tax_total': 0,
-            'grand_total': invoice_doc.grand_total,
-            'in_words': invoice_doc.in_words
-        },
-        'payments': [],
-        'customer_info': {
-            'customer': invoice_doc.customer,
-            'customer_name': invoice_doc.customer_name,
-            'tax_id': invoice_doc.tax_id
-        }
-    }
-    
-    # Summarize items
-    for item in invoice_doc.items:
-        if item.item_name and item.rate and item.qty:
-            item_total = item.rate * item.qty
-            summary['invoice_items'].append({
-                'item_code': item.item_code,
-                'item_name': item.item_name,
-                'qty': item.qty,
-                'uom': item.uom,
-                'rate': item.rate,
-                'discount_percentage': item.discount_percentage,
-                'discount_amount': item.discount_amount,
-                'total': item_total
-            })
-            summary['totals']['subtotal'] += item_total
-            if item.discount_amount:
-                summary['totals']['discount_total'] += item.discount_amount
-    
-    # Summarize taxes
-    if invoice_doc.taxes:
-        for tax in invoice_doc.taxes:
-            summary['totals']['tax_total'] += tax.tax_amount
-    
-    # Summarize payments
-    for payment in invoice_doc.payments:
-        summary['payments'].append({
-            'mode': payment.mode_of_payment,
-            'amount': payment.amount,
-            'type': payment.type
-        })
-    
-    # Add loyalty points if used
-    if invoice_doc.redeem_loyalty_points:
-        summary['loyalty'] = {
-            'points_redeemed': invoice_doc.loyalty_points,
-            'amount': invoice_doc.loyalty_amount
-        }
-    
-    # Add customer credit if used
-    if invoice_doc.redeemed_customer_credit:
-        summary['customer_credit'] = {
-            'amount': invoice_doc.redeemed_customer_credit
-        }
-    
-    return summary
-
-def get_payment_origin_details(invoice_doc, data):
-    """Get structured payment origin details for tracking"""
-    origin = {
-        'source': 'POS Awesome',
-        'type': 'offline' if invoice_doc.is_pos else 'web',
-        'pos_profile': invoice_doc.pos_profile if invoice_doc.is_pos else None,
-        'shift': invoice_doc.posa_pos_opening_shift if invoice_doc.is_pos else None,
-        'user': frappe.session.user,
-        'timestamp': frappe.utils.now(),
-        'device': data.get('device_info', {})
-    }
-    
-    if invoice_doc.is_pos:
-        origin['offline_sync'] = bool(data.get('offline_sync'))
-        if data.get('offline_sync'):
-            origin['sync_timestamp'] = data.get('sync_timestamp')
-    
-    return origin
 
 @frappe.whitelist()
 def submit_invoice(invoice, data):
-    try:
-        data = json.loads(data)
-        invoice = json.loads(invoice)
-        
-        # Get POS Profile first
-        if not invoice.get("pos_profile"):
-            frappe.throw(_("POS Profile is required"))
-            
-        pos_profile = frappe.get_doc("POS Profile", invoice.get("pos_profile"))
-        
-        # Auto set company from POS Profile if not provided
-        if not invoice.get("company"):
-            invoice["company"] = pos_profile.company
-            
-        if not invoice.get("company"):
-            frappe.throw(_("Company is required and could not be determined from POS Profile"))
-            
-        # Check if invoice already exists and is submitted
-        if invoice.get("name"):
-            existing_invoice = frappe.get_doc("Sales Invoice", invoice.get("name"))
-            if existing_invoice.docstatus == 1:
-                frappe.throw(
-                    _("Invoice {0} is already submitted").format(invoice.get("name")),
-                    title=_("Invalid Action")
-                )
-        
-        # Sanitize the invoice data
-        sanitized_invoice = sanitize_invoice_data(invoice)
-        
-        # Double check company is set after sanitization
-        if not sanitized_invoice.get("company"):
-            sanitized_invoice["company"] = pos_profile.company
-            
-        # Set required accounts from POS Profile
-        sanitized_invoice["debit_to"] = frappe.get_value("Company", sanitized_invoice.get("company"), "default_receivable_account")
-        
-        # Get income account from POS Profile or Company
-        income_account = pos_profile.get("income_account") or frappe.get_value("Company", sanitized_invoice.get("company"), "default_income_account")
-        if not income_account:
-            frappe.throw(_("Please set Income Account in POS Profile or Company"))
-        
-        # Set income account for all items
-        for item in sanitized_invoice.get("items", []):
-            item["income_account"] = income_account
-        
-        invoice_doc = frappe.get_doc(sanitized_invoice)
-        
-        # Run validations
-        validate_dynamic_fields(invoice_doc)
-        invoice_doc.validate()
-        
-        if invoice.get("posa_delivery_date"):
-            invoice_doc.update_stock = 0
-            
-        # Handle cash payments
-        mop_cash_list = [
-            i.mode_of_payment
-            for i in invoice_doc.payments
-            if "cash" in i.mode_of_payment.lower() and i.type == "Cash"
-        ]
-        if len(mop_cash_list) > 0:
-            cash_account = get_bank_cash_account(mop_cash_list[0], invoice_doc.company)
-        else:
-            cash_account = {
-                "account": frappe.get_value(
-                    "Company", invoice_doc.company, "default_cash_account"
-                )
+    data = json.loads(data)
+    invoice = json.loads(invoice)
+    invoice_doc = frappe.get_doc("Sales Invoice", invoice.get("name"))
+    invoice_doc.update(invoice)
+    if invoice.get("posa_delivery_date"):
+        invoice_doc.update_stock = 0
+    mop_cash_list = [
+        i.mode_of_payment
+        for i in invoice_doc.payments
+        if "cash" in i.mode_of_payment.lower() and i.type == "Cash"
+    ]
+    if len(mop_cash_list) > 0:
+        cash_account = get_bank_cash_account(mop_cash_list[0], invoice_doc.company)
+    else:
+        cash_account = {
+            "account": frappe.get_value(
+                "Company", invoice_doc.company, "default_cash_account"
+            )
+        }
+
+    # Update remarks with items details
+    items = []
+    for item in invoice_doc.items:
+        if item.item_name and item.rate and item.qty:
+            total = item.rate * item.qty
+            items.append(f"{item.item_name} - Rate: {item.rate}, Qty: {item.qty}, Amount: {total}")
+    
+    # Add the grand total at the end of remarks
+    grand_total = f"\nGrand Total: {invoice_doc.grand_total}"
+    items.append(grand_total)
+    
+    invoice_doc.remarks = "\n".join(items)
+
+    # creating advance payment
+    if data.get("credit_change"):
+        advance_payment_entry = frappe.get_doc(
+            {
+                "doctype": "Payment Entry",
+                "mode_of_payment": "Cash",
+                "paid_to": cash_account["account"],
+                "payment_type": "Receive",
+                "party_type": "Customer",
+                "party": invoice_doc.get("customer"),
+                "paid_amount": invoice_doc.get("credit_change"),
+                "received_amount": invoice_doc.get("credit_change"),
+                "company": invoice_doc.get("company"),
             }
-
-        # Generate invoice summary
-        summary = generate_invoice_summary(invoice_doc)
-        invoice_doc.db_set('posa_invoice_summary', frappe.as_json(summary), update_modified=False)
-        
-        # Create human-readable remarks
-        remarks = create_invoice_remarks(summary)
-        invoice_doc.remarks = remarks
-        
-        # Get payment origin details
-        payment_origin = get_payment_origin_details(invoice_doc, data)
-        
-        # Handle advance payment if credit change exists
-        if data.get("credit_change"):
-            create_advance_payment(invoice_doc, cash_account, payment_origin)
-
-        # Calculate total cash
-        total_cash = 0
-        if data.get("redeemed_customer_credit"):
-            total_cash = invoice_doc.total - float(data.get("redeemed_customer_credit"))
-
-        # Handle customer credit redemption
-        is_payment_entry = handle_customer_credit_redemption(invoice_doc, data, payment_origin)
-        
-        payments = invoice_doc.payments
-        
-        # Handle bundled items
-        set_batch_nos_for_bundels(invoice_doc, "warehouse", throw=True)
-        
-        # Save the invoice
-        invoice_doc.flags.ignore_permissions = True
-        frappe.flags.ignore_account_permission = True
-        invoice_doc.posa_is_printed = 1
-        invoice_doc.save()
-        
-        # Set due date if provided
-        if data.get("due_date"):
-            frappe.db.set_value(
-                "Sales Invoice",
-                invoice_doc.name,
-                "due_date",
-                data.get("due_date"),
-                update_modified=False,
-            )
-        
-        # Submit invoice based on profile settings
-        if frappe.get_value(
-            "POS Profile",
-            invoice_doc.pos_profile,
-            "posa_allow_submissions_in_background_job",
-        ):
-            queue_background_submission(invoice_doc, data, is_payment_entry, total_cash, cash_account, payments)
-        else:
-            invoice_doc.submit()
-            redeeming_customer_credit(
-                invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
-            )
-        
-        return {"name": invoice_doc.name, "status": invoice_doc.docstatus}
-        
-    except Exception as e:
-        frappe.log_error(f"Error in submit_invoice: {str(e)}\n{frappe.get_traceback()}", "POS Invoice Submit Error")
-        raise
-
-def create_invoice_remarks(summary):
-    """Create human-readable remarks from invoice summary"""
-    remarks = []
-    remarks.append("Items:")
-    for item in summary['invoice_items']:
-        remarks.append(
-            f"- {item['item_name']}: {item['qty']} {item['uom']} x {item['rate']} = {item['total']}"
-            + (f" (Discount: {item['discount_percentage']}%)" if item['discount_percentage'] else "")
         )
-    
-    remarks.append("\nTotals:")
-    remarks.append(f"Subtotal: {summary['totals']['subtotal']}")
-    if summary['totals']['discount_total']:
-        remarks.append(f"Total Discount: {summary['totals']['discount_total']}")
-    if summary['totals']['tax_total']:
-        remarks.append(f"Total Tax: {summary['totals']['tax_total']}")
-    remarks.append(f"Grand Total: {summary['totals']['grand_total']}")
-    
-    if summary.get('loyalty'):
-        remarks.append(f"\nLoyalty Points Redeemed: {summary['loyalty']['points_redeemed']}")
-        remarks.append(f"Loyalty Amount: {summary['loyalty']['amount']}")
-    
-    if summary.get('customer_credit'):
-        remarks.append(f"\nCustomer Credit Used: {summary['customer_credit']['amount']}")
-    
-    remarks.append("\nPayments:")
-    for payment in summary['payments']:
-        remarks.append(f"- {payment['mode']}: {payment['amount']}")
-    
-    return "\n".join(remarks)
 
-def create_advance_payment(invoice_doc, cash_account, payment_origin):
-    """Create advance payment entry for credit change"""
-    advance_payment_entry = frappe.get_doc({
-        "doctype": "Payment Entry",
-        "mode_of_payment": "Cash",
-        "paid_to": cash_account["account"],
-        "payment_type": "Receive",
-        "party_type": "Customer",
-        "party": invoice_doc.get("customer"),
-        "paid_amount": invoice_doc.get("credit_change"),
-        "received_amount": invoice_doc.get("credit_change"),
-        "company": invoice_doc.get("company"),
-        "posa_payment_origin": frappe.as_json(payment_origin),
-        "posa_is_pos_payment": 1,
-        "posa_pos_profile": invoice_doc.pos_profile,
-        "posa_pos_opening_shift": invoice_doc.posa_pos_opening_shift,
-        "posa_created_by": frappe.session.user,
-        "posa_created_at": payment_origin['timestamp'],
-        "remarks": f"Auto payment entry created from POS Invoice {invoice_doc.name}\nOrigin: {payment_origin['type']}\nShift: {payment_origin['shift']}"
-    })
-    
-    advance_payment_entry.flags.ignore_permissions = True
-    frappe.flags.ignore_account_permission = True
-    advance_payment_entry.save()
-    advance_payment_entry.submit()
+        advance_payment_entry.flags.ignore_permissions = True
+        frappe.flags.ignore_account_permission = True
+        advance_payment_entry.save()
+        advance_payment_entry.submit()
 
-def handle_customer_credit_redemption(invoice_doc, data, payment_origin):
-    """Handle customer credit redemption and return if payment entry was created"""
+    # calculating cash
+    total_cash = 0
+    if data.get("redeemed_customer_credit"):
+        total_cash = invoice_doc.total - float(data.get("redeemed_customer_credit"))
+
     is_payment_entry = 0
     if data.get("redeemed_customer_credit"):
         for row in data.get("customer_credit_dict"):
             if row["type"] == "Advance" and row["credit_to_redeem"]:
                 advance = frappe.get_doc("Payment Entry", row["credit_origin"])
-                
+
                 advance_payment = {
                     "reference_type": "Payment Entry",
                     "reference_name": advance.name,
                     "remarks": advance.remarks,
                     "advance_amount": advance.unallocated_amount,
                     "allocated_amount": row["credit_to_redeem"],
-                    "posa_payment_origin": frappe.as_json(payment_origin)
                 }
-                
+
                 invoice_doc.append("advances", advance_payment)
                 invoice_doc.is_pos = 0
                 is_payment_entry = 1
-    
-    return is_payment_entry
 
-def queue_background_submission(invoice_doc, data, is_payment_entry, total_cash, cash_account, payments):
-    """Queue invoice submission as background jobs"""
-    invoices_list = frappe.get_all(
-        "Sales Invoice",
-        filters={
-            "posa_pos_opening_shift": invoice_doc.posa_pos_opening_shift,
-            "docstatus": 0,
-            "posa_is_printed": 1,
-        },
-    )
-    
-    queued_jobs = []
-    
-    for invoice in invoices_list:
-        try:
-            job = enqueue(
+    payments = invoice_doc.payments
+
+    # if frappe.get_value("POS Profile", invoice_doc.pos_profile, "posa_auto_set_batch"):
+    #     set_batch_nos(invoice_doc, "warehouse", throw=True)
+    set_batch_nos_for_bundels(invoice_doc, "warehouse", throw=True)
+
+    invoice_doc.flags.ignore_permissions = True
+    frappe.flags.ignore_account_permission = True
+    invoice_doc.posa_is_printed = 1
+    invoice_doc.save()
+
+    if data.get("due_date"):
+        frappe.db.set_value(
+            "Sales Invoice",
+            invoice_doc.name,
+            "due_date",
+            data.get("due_date"),
+            update_modified=False,
+        )
+
+    if frappe.get_value(
+        "POS Profile",
+        invoice_doc.pos_profile,
+        "posa_allow_submissions_in_background_job",
+    ):
+        invoices_list = frappe.get_all(
+            "Sales Invoice",
+            filters={
+                "posa_pos_opening_shift": invoice_doc.posa_pos_opening_shift,
+                "docstatus": 0,
+                "posa_is_printed": 1,
+            },
+        )
+        for invoice in invoices_list:
+            enqueue(
                 method=submit_in_background_job,
                 queue="short",
-                timeout=300,
+                timeout=1000,
                 is_async=True,
                 kwargs={
                     "invoice": invoice.name,
@@ -1066,160 +733,164 @@ def queue_background_submission(invoice_doc, data, is_payment_entry, total_cash,
                     "payments": payments,
                 },
             )
-            
-            job_info = {
-                "invoice": invoice.name,
-                "job_id": job.id if job else "Unknown",
-                "queue": "short",
-                "timestamp": frappe.utils.now()
-            }
-            queued_jobs.append(job_info)
-            
-            frappe.log_error(
-                f"Enqueued background job: {frappe.as_json(job_info)}", 
-                "POS Invoice Submit Queue"
-            )
-            
-        except Exception as e:
-            frappe.log_error(
-                f"Failed to enqueue job for invoice {invoice.name}: {str(e)}", 
-                "POS Invoice Submit Queue Error"
-            )
-    
-    if queued_jobs:
-        frappe.log_error(
-            f"Batch Summary - Queued Jobs: {frappe.as_json(queued_jobs)}", 
-            "POS Invoice Submit Batch"
+    else:
+        invoice_doc.submit()
+        redeeming_customer_credit(
+            invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
         )
 
-def validate_pos_invoice(invoice_doc):
-    """Validate POS specific requirements for invoice"""
-    if not invoice_doc.is_pos:
-        frappe.throw(_("Not a POS Invoice"))
-        
-    # Add any additional validation logic for POS invoices
-    pass
+    return {"name": invoice_doc.name, "status": invoice_doc.docstatus}
+
+
+def set_batch_nos_for_bundels(doc, warehouse_field, throw=False):
+    """Automatically select `batch_no` for outgoing items in item table"""
+    for d in doc.packed_items:
+        qty = d.get("stock_qty") or d.get("transfer_qty") or d.get("qty") or 0
+        has_batch_no = frappe.db.get_value("Item", d.item_code, "has_batch_no")
+        warehouse = d.get(warehouse_field, None)
+        if has_batch_no and warehouse and qty > 0:
+            if not d.batch_no:
+                d.batch_no = get_batch_no(
+                    d.item_code, warehouse, qty, throw, d.serial_no
+                )
+            else:
+                batch_qty = get_batch_qty(batch_no=d.batch_no, warehouse=warehouse)
+                if flt(batch_qty, d.precision("qty")) < flt(qty, d.precision("qty")):
+                    frappe.throw(
+                        _(
+                            "Row #{0}: The batch {1} has only {2} qty. Please select another batch which has {3} qty available or split the row into multiple rows, to deliver/issue from multiple batches"
+                        ).format(d.idx, d.batch_no, batch_qty, qty)
+                    )
+
+
+def redeeming_customer_credit(
+    invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
+):
+    # redeeming customer credit with journal voucher
+    today = nowdate()
+    if data.get("redeemed_customer_credit"):
+        cost_center = frappe.get_value(
+            "POS Profile", invoice_doc.pos_profile, "cost_center"
+        )
+        if not cost_center:
+            cost_center = frappe.get_value(
+                "Company", invoice_doc.company, "cost_center"
+            )
+        if not cost_center:
+            frappe.throw(
+                _("Cost Center is not set in pos profile {}").format(
+                    invoice_doc.pos_profile
+                )
+            )
+        for row in data.get("customer_credit_dict"):
+            if row["type"] == "Invoice" and row["credit_to_redeem"]:
+                outstanding_invoice = frappe.get_doc(
+                    "Sales Invoice", row["credit_origin"]
+                )
+
+                jv_doc = frappe.get_doc(
+                    {
+                        "doctype": "Journal Entry",
+                        "voucher_type": "Journal Entry",
+                        "posting_date": today,
+                        "company": invoice_doc.company,
+                    }
+                )
+
+                jv_debit_entry = {
+                    "account": outstanding_invoice.debit_to,
+                    "party_type": "Customer",
+                    "party": invoice_doc.customer,
+                    "reference_type": "Sales Invoice",
+                    "reference_name": outstanding_invoice.name,
+                    "debit_in_account_currency": row["credit_to_redeem"],
+                    "cost_center": cost_center,
+                }
+
+                jv_credit_entry = {
+                    "account": invoice_doc.debit_to,
+                    "party_type": "Customer",
+                    "party": invoice_doc.customer,
+                    "reference_type": "Sales Invoice",
+                    "reference_name": invoice_doc.name,
+                    "credit_in_account_currency": row["credit_to_redeem"],
+                    "cost_center": cost_center,
+                }
+
+                jv_doc.append("accounts", jv_debit_entry)
+                jv_doc.append("accounts", jv_credit_entry)
+
+                jv_doc.flags.ignore_permissions = True
+                frappe.flags.ignore_account_permission = True
+                jv_doc.set_missing_values()
+                jv_doc.save()
+                jv_doc.submit()
+
+    if is_payment_entry and total_cash > 0:
+        for payment in payments:
+            if not payment.amount:
+                continue
+            payment_entry_doc = frappe.get_doc(
+                {
+                    "doctype": "Payment Entry",
+                    "posting_date": today,
+                    "payment_type": "Receive",
+                    "party_type": "Customer",
+                    "party": invoice_doc.customer,
+                    "paid_amount": payment.amount,
+                    "received_amount": payment.amount,
+                    "paid_from": invoice_doc.debit_to,
+                    "paid_to": payment.account,
+                    "company": invoice_doc.company,
+                    "mode_of_payment": payment.mode_of_payment,
+                    "reference_no": invoice_doc.posa_pos_opening_shift,
+                    "reference_date": today,
+                }
+            )
+
+            payment_reference = {
+                "allocated_amount": payment.amount,
+                "due_date": data.get("due_date"),
+                "reference_doctype": "Sales Invoice",
+                "reference_name": invoice_doc.name,
+            }
+
+            payment_entry_doc.append("references", payment_reference)
+            payment_entry_doc.flags.ignore_permissions = True
+            frappe.flags.ignore_account_permission = True
+            payment_entry_doc.save()
+            payment_entry_doc.submit()
 
 
 def submit_in_background_job(kwargs):
-    """Submit invoice in background with retry mechanism"""
     invoice = kwargs.get("invoice")
+    invoice_doc = kwargs.get("invoice_doc")
     data = kwargs.get("data")
     is_payment_entry = kwargs.get("is_payment_entry")
     total_cash = kwargs.get("total_cash")
     cash_account = kwargs.get("cash_account")
     payments = kwargs.get("payments")
+
+    invoice_doc = frappe.get_doc("Sales Invoice", invoice)
     
-    max_retries = 3
-    retry_count = 0
+    # Update remarks with items details for background job
+    items = []
+    for item in invoice_doc.items:
+        if item.item_name and item.rate and item.qty:
+            total = item.rate * item.qty
+            items.append(f"{item.item_name} - Rate: {item.rate}, Qty: {item.qty}, Amount: {total}")
     
-    while retry_count < max_retries:
-        try:
-            # Log job start
-            job_log = {
-                "invoice": invoice,
-                "attempt": retry_count + 1,
-                "timestamp": frappe.utils.now(),
-                "status": "Started"
-            }
-            frappe.log_error(f"Background Job Started: {frappe.as_json(job_log)}", "POS Invoice Submit")
-            
-            # Check if invoice already exists and is submitted
-            try:
-                existing_invoice = frappe.get_doc("Sales Invoice", invoice)
-                if existing_invoice.docstatus == 1:
-                    frappe.log_error(
-                        f"Skipping duplicate submission for invoice {invoice} - already submitted",
-                        "POS Invoice Submit"
-                    )
-                    return {
-                        "name": existing_invoice.name,
-                        "status": existing_invoice.docstatus,
-                        "message": "Invoice already submitted"
-                    }
-            except Exception as e:
-                frappe.log_error(f"Error checking invoice status: {str(e)}", "POS Invoice Submit")
-            
-            invoice_doc = frappe.get_doc("Sales Invoice", invoice)
-            
-            # Validate all dynamic fields including loyalty and credit redemptions
-            validate_dynamic_fields(invoice_doc)
-            
-            # Update remarks with items details for background job
-            items_summary = []
-            total_amount = 0
-            for item in invoice_doc.items:
-                if item.item_name and item.rate and item.qty:
-                    amount = item.rate * item.qty
-                    total_amount += amount
-                    items_summary.append(f"{item.item_name} - Rate: {item.rate}, Qty: {item.qty}, Amount: {amount}")
-            
-            # Add payment details and grand total
-            payment_summary = []
-            for payment in invoice_doc.payments:
-                payment_summary.append(f"Payment ({payment.mode_of_payment}): {payment.amount}")
-            
-            invoice_doc.remarks = "\n".join([
-                "=== Invoice Summary ===",
-                *items_summary,
-                "=== Payment Details ===",
-                *payment_summary,
-                f"\nGrand Total: {invoice_doc.grand_total}",
-                f"Background Job Attempt: {retry_count + 1}"
-            ])
-            
-            invoice_doc.flags.ignore_permissions = True
-            frappe.flags.ignore_account_permission = True
-            
-            # Save before submit to update remarks
-            invoice_doc.save()
-            
-            # Submit invoice
-            invoice_doc.submit()
-            
-            # Process payments
-            redeeming_customer_credit(
-                invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
-            )
-            
-            # Log successful completion
-            job_log["status"] = "Completed"
-            job_log["docstatus"] = invoice_doc.docstatus
-            frappe.log_error(f"Background Job Completed: {frappe.as_json(job_log)}", "POS Invoice Submit")
-            
-            return {
-                "name": invoice_doc.name,
-                "status": invoice_doc.docstatus,
-                "message": "Invoice submitted successfully"
-            }
-            
-        except Exception as e:
-            retry_count += 1
-            error_msg = f"Error in attempt {retry_count}: {str(e)}"
-            
-            # Log the error
-            job_log["status"] = "Failed"
-            job_log["error"] = error_msg
-            frappe.log_error(
-                f"Background Job Error: {frappe.as_json(job_log)}", 
-                f"POS Invoice Submit (Attempt {retry_count})"
-            )
-            
-            if retry_count == max_retries:
-                # Final attempt failed
-                frappe.log_error(
-                    f"All retries failed for invoice {invoice}. Final error: {error_msg}",
-                    "POS Invoice Submit Failed"
-                )
-                return {
-                    "name": invoice,
-                    "status": "Failed",
-                    "message": f"Failed to submit invoice after {max_retries} attempts. Please try again or contact administrator."
-                }
-            else:
-                # Wait before retry (exponential backoff)
-                time.sleep(2 ** retry_count)
-                continue
+    # Add the grand total at the end of remarks
+    grand_total = f"\nGrand Total: {invoice_doc.grand_total}"
+    items.append(grand_total)
+    
+    invoice_doc.remarks = "\n".join(items)
+    invoice_doc.save()
+    
+    invoice_doc.submit()
+    redeeming_customer_credit(
+        invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
+    )
 
 
 @frappe.whitelist()
@@ -1329,14 +1000,9 @@ def get_items_details(pos_profile, items_data):
                     frappe.cache().delete_value('bin_qty_cache')
                 
                 item_stock_qty = get_stock_availability(item_code, warehouse)
-                
-                # Get item details with fallback for non-existent items
-                item_details = frappe.db.get_value(
+                (has_batch_no, has_serial_no) = frappe.db.get_value(
                     "Item", item_code, ["has_batch_no", "has_serial_no"]
                 )
-                has_batch_no = item_details[0] if item_details else 0
-                has_serial_no = item_details[1] if item_details else 0
-
                 uoms = frappe.get_all(
                     "UOM Conversion Detail",
                     filters={"parent": item_code},
@@ -2343,108 +2009,73 @@ def get_active_gift_coupons(customer, company):
 
 @frappe.whitelist()
 def get_customer_info(customer):
-    """Get customer information with offline support"""
-    try:
-        customer_doc = frappe.get_doc("Customer", customer)
+    customer = frappe.get_doc("Customer", customer)
 
-        # Get the first shipping address
-        addresses = frappe.db.sql(
-            """
-            SELECT
-                address.name as address_name,
-                address.address_line1,
-                address.address_line2,
-                address.city,
-                address.state,
-                address.country,
-                address.address_type
-            FROM `tabAddress` address
-            INNER JOIN `tabDynamic Link` link
-                ON (address.name = link.parent)
-            WHERE
-                link.link_doctype = 'Customer'
-                AND link.link_name = %s
-                AND address.disabled = 0
-                AND address.address_type = 'Shipping'
-            ORDER BY address.creation DESC
-            LIMIT 1
-            """,
-            (customer,),
-            as_dict=True
+    res = {"loyalty_points": None, "conversion_factor": None}
+
+    res["email_id"] = customer.email_id
+    res["mobile_no"] = customer.mobile_no
+    res["image"] = customer.image
+    res["loyalty_program"] = customer.loyalty_program
+    res["customer_price_list"] = customer.default_price_list
+    res["customer_group"] = customer.customer_group
+    res["customer_type"] = customer.customer_type
+    res["territory"] = customer.territory
+    res["birthday"] = customer.posa_birthday
+    res["gender"] = customer.gender
+    res["tax_id"] = customer.tax_id
+    res["posa_discount"] = customer.posa_discount
+    res["name"] = customer.name
+    res["customer_name"] = customer.customer_name
+    res["customer_group_price_list"] = frappe.get_value(
+        "Customer Group", customer.customer_group, "default_price_list"
+    )
+
+    if customer.loyalty_program:
+        lp_details = get_loyalty_program_details_with_points(
+            customer.name,
+            customer.loyalty_program,
+            silent=True,
+            include_expired_entry=False,
         )
+        res["loyalty_points"] = lp_details.get("loyalty_points")
+        res["conversion_factor"] = lp_details.get("conversion_factor")
+        
+    addresses = frappe.db.sql(
+        """
+        SELECT
+            address.name as address_name,
+            address.address_line1,
+            address.address_line2,
+            address.city,
+            address.state,
+            address.country,
+            address.address_type
+        FROM `tabAddress` address
+        INNER JOIN `tabDynamic Link` link
+            ON (address.name = link.parent)
+        WHERE
+            link.link_doctype = 'Customer'
+            AND link.link_name = %s
+            AND address.disabled = 0
+            AND address.address_type = 'Shipping'
+        ORDER BY address.creation DESC
+        LIMIT 1
+        """,
+        (customer.name,),
+        as_dict=True
+    )
 
-        res = {
-            "loyalty_points": None,
-            "conversion_factor": None,
-            "email_id": customer_doc.email_id,
-            "mobile_no": customer_doc.mobile_no,
-            "image": customer_doc.image,
-            "loyalty_program": customer_doc.loyalty_program,
-            "customer_price_list": customer_doc.default_price_list,
-            "customer_group": customer_doc.customer_group,
-            "customer_type": customer_doc.customer_type,
-            "territory": customer_doc.territory,
-            "birthday": customer_doc.posa_birthday,
-            "gender": customer_doc.gender,
-            "tax_id": customer_doc.tax_id,
-            "posa_discount": customer_doc.posa_discount,
-            "name": customer_doc.name,
-            "customer_name": customer_doc.customer_name,
-            "customer_group_price_list": frappe.get_value(
-                "Customer Group", customer_doc.customer_group, "default_price_list"
-            )
-        }
+    if addresses:
+        
+        addr = addresses[0]
+        res["address_line1"] = addr.address_line1 or ""
+        res["address_line2"] = addr.address_line2 or ""
+        res["city"] = addr.city or ""
+        res["state"] = addr.state or ""
+        res["country"] = addr.country or ""
 
-        # Add address details if available
-        if addresses:
-            addr = addresses[0]
-            res.update({
-                "address_line1": addr.address_line1 or "",
-                "address_line2": addr.address_line2 or "",
-                "city": addr.city or "",
-                "state": addr.state or "",
-                "country": addr.country or ""
-            })
-
-        # Get loyalty program details
-        if customer_doc.loyalty_program:
-            try:
-                lp_details = get_loyalty_program_details_with_points(
-                    customer_doc.name,
-                    customer_doc.loyalty_program,
-                    silent=True,
-                    include_expired_entry=False,
-                )
-                res["loyalty_points"] = lp_details.get("loyalty_points")
-                res["conversion_factor"] = lp_details.get("conversion_factor")
-            except Exception as e:
-                frappe.log_error(f"Error getting loyalty points: {str(e)}", "POS Awesome")
-
-        return res
-
-    except Exception as e:
-        frappe.log_error(f"Error in get_customer_info: {str(e)}", "POS Awesome")
-        return {
-            "loyalty_points": None,
-            "conversion_factor": None,
-            "email_id": None,
-            "mobile_no": None,
-            "image": None,
-            "loyalty_program": None,
-            "customer_price_list": None,
-            "customer_group": None,
-            "customer_type": None,
-            "territory": None,
-            "birthday": None,
-            "gender": None,
-            "tax_id": None,
-            "posa_discount": None,
-            "name": customer,
-            "customer_name": None,
-            "address_line1": None,
-            "city": None,
-            "country": None
-        }
+    return res
 
 
 def get_company_domain(company):
@@ -2552,110 +2183,11 @@ def get_sales_invoice_child_table(sales_invoice, sales_invoice_item):
 
 @frappe.whitelist()
 def update_invoice_from_order(data):
-    data = json.loads(data)
-    invoice_name = data.get("name")
-    
-    if not invoice_name:
-        frappe.throw(_("Invoice name is required"))
-        
-    # Get existing invoice and validate docstatus
-    existing_invoice = frappe.get_doc("Sales Invoice", invoice_name)
-    if existing_invoice.docstatus != 0:
-        frappe.throw(_("Cannot update submitted or cancelled invoice {0}").format(invoice_name))
-    
-    # Store original values for logging
-    original_values = {
-        'customer': existing_invoice.customer,
-        'total': existing_invoice.total,
-        'grand_total': existing_invoice.grand_total,
-        'items': [{
-            'item_code': item.item_code,
-            'qty': item.qty,
-            'rate': item.rate,
-            'amount': item.amount
-        } for item in existing_invoice.items],
-        'payments': [{
-            'mode_of_payment': payment.mode_of_payment,
-            'amount': payment.amount
-        } for payment in existing_invoice.payments]
-    }
-    
-    # Update the invoice
-    invoice_doc = frappe.get_doc("Sales Invoice", invoice_name)
-    invoice_doc.update(data)
-    
-    # Track changes for logging
-    changes = {
-        'customer': invoice_doc.customer if invoice_doc.customer != original_values['customer'] else None,
-        'total': invoice_doc.total if invoice_doc.total != original_values['total'] else None,
-        'grand_total': invoice_doc.grand_total if invoice_doc.grand_total != original_values['grand_total'] else None,
-        'items_changed': [],
-        'payments_changed': []
-    }
-    
-    # Track item changes
-    for idx, item in enumerate(invoice_doc.items):
-        if idx < len(original_values['items']):
-            orig_item = original_values['items'][idx]
-            if (item.item_code != orig_item['item_code'] or 
-                item.qty != orig_item['qty'] or 
-                item.rate != orig_item['rate'] or 
-                item.amount != orig_item['amount']):
-                changes['items_changed'].append({
-                    'item_code': item.item_code,
-                    'original': orig_item,
-                    'new': {
-                        'qty': item.qty,
-                        'rate': item.rate,
-                        'amount': item.amount
-                    }
-                })
-        else:
-            # New item added
-            changes['items_changed'].append({
-                'item_code': item.item_code,
-                'original': None,
-                'new': {
-                    'qty': item.qty,
-                    'rate': item.rate,
-                    'amount': item.amount
-                }
-            })
-    
-    # Track payment changes
-    for idx, payment in enumerate(invoice_doc.payments):
-        if idx < len(original_values['payments']):
-            orig_payment = original_values['payments'][idx]
-            if (payment.mode_of_payment != orig_payment['mode_of_payment'] or 
-                payment.amount != orig_payment['amount']):
-                changes['payments_changed'].append({
-                    'mode_of_payment': payment.mode_of_payment,
-                    'original': orig_payment,
-                    'new': {
-                        'amount': payment.amount
-                    }
-                })
-        else:
-            # New payment added
-            changes['payments_changed'].append({
-                'mode_of_payment': payment.mode_of_payment,
-                'original': None,
-                'new': {
-                    'amount': payment.amount
-                }
-            })
-    
-    # Log the changes
-    if any(changes.values()):
-        frappe.log_error(
-            message=f"Invoice {invoice_name} updated with changes: {frappe.as_json(changes)}",
-            title="POS Invoice Update"
-        )
-    
-    invoice_doc.flags.ignore_permissions = True
-    invoice_doc.save()
-    
-    return invoice_doc
+     data = json.loads(data)
+     invoice_doc = frappe.get_doc("Sales Invoice", data.get("name"))
+     invoice_doc.update(data)
+     invoice_doc.save()
+     return invoice_doc
 
 @frappe.whitelist()
 def validate_return_items(return_against, items):
@@ -2730,313 +2262,3 @@ def get_app_info() -> Dict[str, List[Dict[str, str]]]:
     ]
 
     return {"apps": apps_info}
-
-
-def validate(doc, method):
-    if doc.is_pos and doc.pos_profile:
-        validate_dynamic_fields(doc)
-        validate_shift(doc)
-    auto_set_delivery_charges(doc)
-    calc_delivery_charges(doc)
-
-
-def before_submit(doc, method):
-    add_loyalty_point(doc)
-    create_sales_order(doc)
-    update_coupon(doc, "used")
-
-
-def before_cancel(doc, method):
-    update_coupon(doc, "cancelled")
-
-
-def add_loyalty_point(invoice_doc):
-    for offer in invoice_doc.posa_offers:
-        if offer.offer == "Loyalty Point":
-            original_offer = frappe.get_doc("POS Offer", offer.offer_name)
-            if original_offer.loyalty_points > 0:
-                loyalty_program = frappe.get_value(
-                    "Customer", invoice_doc.customer, "loyalty_program"
-                )
-                if not loyalty_program:
-                    loyalty_program = original_offer.loyalty_program
-                doc = frappe.get_doc(
-                    {
-                        "doctype": "Loyalty Point Entry",
-                        "loyalty_program": loyalty_program,
-                        "loyalty_program_tier": original_offer.name,
-                        "customer": invoice_doc.customer,
-                        "invoice_type": "Sales Invoice",
-                        "invoice": invoice_doc.name,
-                        "loyalty_points": original_offer.loyalty_points,
-                        "expiry_date": add_days(invoice_doc.posting_date, 10000),
-                        "posting_date": invoice_doc.posting_date,
-                        "company": invoice_doc.company,
-                    }
-                )
-                doc.insert(ignore_permissions=True)
-
-
-def create_sales_order(doc):
-    if (
-        doc.posa_pos_opening_shift
-        and doc.pos_profile
-        and doc.is_pos
-        and doc.posa_delivery_date
-        and not doc.update_stock
-        and frappe.get_value("POS Profile", doc.pos_profile, "posa_allow_sales_order")
-    ):
-        sales_order_doc = make_sales_order(doc.name)
-        if sales_order_doc:
-            sales_order_doc.posa_notes = doc.posa_notes
-            sales_order_doc.flags.ignore_permissions = True
-            sales_order_doc.flags.ignore_account_permission = True
-            sales_order_doc.save()
-            sales_order_doc.submit()
-            url = frappe.utils.get_url_to_form(
-                sales_order_doc.doctype, sales_order_doc.name
-            )
-            msgprint = "Sales Order Created at <a href='{0}'>{1}</a>".format(
-                url, sales_order_doc.name
-            )
-            frappe.msgprint(
-                _(msgprint), title="Sales Order Created", indicator="green", alert=True
-            )
-            i = 0
-            for item in sales_order_doc.items:
-                doc.items[i].sales_order = sales_order_doc.name
-                doc.items[i].so_detail = item.name
-                i += 1
-
-
-def make_sales_order(source_name, target_doc=None, ignore_permissions=True):
-    def set_missing_values(source, target):
-        target.ignore_pricing_rule = 1
-        target.flags.ignore_permissions = ignore_permissions
-        target.run_method("set_missing_values")
-        target.run_method("calculate_taxes_and_totals")
-
-    def update_item(obj, target, source_parent):
-        target.stock_qty = flt(obj.qty) * flt(obj.conversion_factor)
-        target.delivery_date = (
-            obj.posa_delivery_date or source_parent.posa_delivery_date
-        )
-
-    doclist = get_mapped_doc(
-        "Sales Invoice",
-        source_name,
-        {
-            "Sales Invoice": {
-                "doctype": "Sales Order",
-            },
-            "Sales Invoice Item": {
-                "doctype": "Sales Order Item",
-                "field_map": {
-                    "cost_center": "cost_center",
-                    "Warehouse": "warehouse",
-                    "delivery_date": "posa_delivery_date",
-                    "posa_notes": "posa_notes",
-                },
-                "postprocess": update_item,
-            },
-            "Sales Taxes and Charges": {
-                "doctype": "Sales Taxes and Charges",
-                "add_if_empty": True,
-            },
-            "Sales Team": {"doctype": "Sales Team", "add_if_empty": True},
-            "Payment Schedule": {"doctype": "Payment Schedule", "add_if_empty": True},
-        },
-        target_doc,
-        set_missing_values,
-        ignore_permissions=ignore_permissions,
-    )
-
-    return doclist
-
-
-def validate_shift(doc):
-    if doc.posa_pos_opening_shift and doc.pos_profile and doc.is_pos:
-        # check if shift is open
-        shift = frappe.get_cached_doc("POS Opening Shift", doc.posa_pos_opening_shift)
-        if shift.status != "Open":
-            frappe.throw(_("POS Shift {0} is not open").format(shift.name))
-        # check if shift is for the same profile
-        if shift.pos_profile != doc.pos_profile:
-            frappe.throw(
-                _("POS Opening Shift {0} is not for the same POS Profile").format(
-                    shift.name
-                )
-            )
-        # check if shift is for the same company
-        if shift.company != doc.company:
-            frappe.throw(
-                _("POS Opening Shift {0} is not for the same company").format(
-                    shift.name
-                )
-            )
-
-
-def validate_dynamic_fields(doc):
-    """Validate dynamic field restrictions in backend"""
-    pos_profile = frappe.get_doc("POS Profile", doc.pos_profile)
-    
-    # Validate if editing rate is allowed
-    if not pos_profile.posa_allow_user_to_edit_rate and any(item.rate != item.price_list_rate for item in doc.items):
-        frappe.throw(_("Editing rate is not allowed in this POS Profile"))
-    
-    # Validate if editing discount is allowed
-    if not pos_profile.posa_allow_user_to_edit_item_discount and any(item.discount_percentage > 0 or item.discount_amount > 0 for item in doc.items):
-        frappe.throw(_("Editing discount is not allowed in this POS Profile"))
-        
-    # Validate if editing item is allowed after adding
-    if not pos_profile.posa_allow_item_edit and doc.posa_is_printed:
-        original_doc = frappe.get_doc("Sales Invoice", doc.name) if doc.name else None
-        if original_doc:
-            original_items = {item.item_code: item.qty for item in original_doc.items}
-            for item in doc.items:
-                if item.item_code in original_items and item.qty != original_items[item.item_code]:
-                    frappe.throw(_("Editing item quantity after adding is not allowed in this POS Profile"))
-                    
-    # Validate maximum discount percentage
-    if pos_profile.posa_max_discount_percentage:
-        max_discount = float(pos_profile.posa_max_discount_percentage)
-        for item in doc.items:
-            if item.discount_percentage > max_discount:
-                frappe.throw(_("Discount percentage cannot be more than {0}%").format(max_discount))
-                
-    # Validate if return is allowed
-    if doc.is_return and not pos_profile.posa_allow_return:
-        frappe.throw(_("Returns are not allowed in this POS Profile"))
-        
-    # Validate if sales order creation is allowed
-    if hasattr(doc, 'posa_is_sales_order') and doc.posa_is_sales_order and not pos_profile.posa_allow_sales_order:
-        frappe.throw(_("Sales Order creation is not allowed in this POS Profile"))
-        
-    # Validate if customer credit is allowed
-    if hasattr(doc, 'redeemed_customer_credit') and doc.redeemed_customer_credit and not pos_profile.posa_allow_credit_sale:
-        frappe.throw(_("Customer credit is not allowed in this POS Profile"))
-        
-    # Validate if delivery charges are allowed
-    if doc.posa_delivery_charges and not pos_profile.posa_allow_delivery_charges:
-        frappe.throw(_("Delivery charges are not allowed in this POS Profile"))
-    
-    # Validate loyalty points redemption
-    if doc.redeem_loyalty_points:
-        customer_details = get_customer_info(doc.customer)
-        available_points = customer_details.get("loyalty_points", 0)
-        conversion_factor = customer_details.get("conversion_factor", 0)
-        
-        if not available_points or not conversion_factor:
-            frappe.throw(_("No valid loyalty points found for customer"))
-            
-        max_redeemable_amount = flt(available_points * conversion_factor)
-        if flt(doc.loyalty_amount) > max_redeemable_amount:
-            frappe.throw(
-                _("Cannot redeem more than {0} loyalty points ({1})").format(
-                    available_points,
-                    frappe.format_value(max_redeemable_amount, {"fieldtype": "Currency"})
-                )
-            )
-    
-    # Validate customer credit redemption
-    if hasattr(doc, 'redeemed_customer_credit') and doc.redeemed_customer_credit:
-        if not pos_profile.posa_allow_credit_sale:
-            frappe.throw(_("Customer credit is not allowed in this POS Profile"))
-            
-        available_credits = get_available_credit(doc.customer, doc.company)
-        total_available_credit = sum(credit.get("total_credit", 0) for credit in available_credits)
-        
-        if flt(doc.redeemed_customer_credit) > total_available_credit:
-            frappe.throw(
-                _("Cannot redeem more than available credit amount of {0}").format(
-                    frappe.format_value(total_available_credit, {"fieldtype": "Currency"})
-                )
-            )
-            
-        # Validate individual credit redemptions
-        credit_dict = doc.get("customer_credit_dict", [])
-        for credit in credit_dict:
-            matching_credit = next(
-                (ac for ac in available_credits if ac["credit_origin"] == credit["credit_origin"]),
-                None
-            )
-            if not matching_credit:
-                frappe.throw(_("Invalid credit reference: {0}").format(credit["credit_origin"]))
-                
-            if flt(credit["credit_to_redeem"]) > flt(matching_credit["total_credit"]):
-                frappe.throw(
-                    _("Cannot redeem more than available credit of {0} for {1}").format(
-                        frappe.format_value(matching_credit["total_credit"], {"fieldtype": "Currency"}),
-                        credit["credit_origin"]
-                    )
-                )
-
-@frappe.whitelist()
-def ping():
-    """Simple endpoint to verify backend connectivity"""
-    return 'pong'
-
-def auto_set_delivery_charges(doc):
-    """Auto set delivery charges based on POS Profile settings"""
-    if not doc.is_pos or not doc.pos_profile:
-        return
-
-    pos_profile = frappe.get_doc("POS Profile", doc.pos_profile)
-    if not pos_profile.posa_use_delivery_charges:
-        return
-
-    if hasattr(doc, 'posa_delivery_charges') and doc.posa_delivery_charges:
-        return
-
-    if not doc.shipping_address_name:
-        return
-
-    applicable_charges = get_applicable_delivery_charges(
-        doc.company,
-        doc.pos_profile,
-        doc.customer,
-        doc.shipping_address_name
-    )
-
-    if applicable_charges:
-        doc.posa_delivery_charges = applicable_charges[0].name
-        doc.posa_delivery_charges_rate = applicable_charges[0].rate
-
-def calc_delivery_charges(doc):
-    """Calculate delivery charges if enabled in POS Profile"""
-    if not doc.is_pos or not doc.pos_profile:
-        return
-
-    pos_profile = frappe.get_doc("POS Profile", doc.pos_profile)
-    if not pos_profile.posa_use_delivery_charges:
-        return
-
-    if not hasattr(doc, 'posa_delivery_charges') or not doc.posa_delivery_charges:
-        return
-
-    delivery_charges = frappe.get_doc("POS Delivery Charges", doc.posa_delivery_charges)
-    if not delivery_charges:
-        return
-
-    # Set delivery charges rate
-    doc.posa_delivery_charges_rate = delivery_charges.rate
-
-    # Add delivery charges to taxes if not already added
-    found = False
-    for tax in doc.taxes:
-        if tax.charge_type == "Actual" and tax.account_head == delivery_charges.account:
-            tax.tax_amount = doc.posa_delivery_charges_rate
-            found = True
-            break
-
-    if not found and delivery_charges.account:
-        doc.append("taxes", {
-            "charge_type": "Actual",
-            "account_head": delivery_charges.account,
-            "description": _("Delivery Charges"),
-            "tax_amount": doc.posa_delivery_charges_rate
-        })
-
-def validate_pos_invoice(invoice_doc):
-    # Add any additional validation logic you want to execute for POS invoices
-    pass

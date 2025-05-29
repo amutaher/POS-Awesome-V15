@@ -2,64 +2,30 @@ import { InvoicesDB, ItemsDB, CustomersDB, PriceListsDB, TaxRulesDB, PosProfileD
 
 // Network status
 let isOnline = navigator.onLine;
-
-// Backend ping check with timeout
-async function checkBackendConnectivity(timeout = 3000) {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
-    
-    const response = await frappe.call({
-      method: 'posawesome.posawesome.api.posapp.ping',
-      args: {},
-      signal: controller.signal
-    });
-    
-    clearTimeout(timeoutId);
-    return response && response.message === 'pong';
-  } catch (error) {
-    console.log('Backend connectivity check failed:', error);
-    return false;
-  }
-}
-
-// Enhanced online status check
-async function isReallyOnline() {
-  return navigator.onLine && await checkBackendConnectivity();
-}
-
-// Show online/offline status with verification
-async function verifyAndUpdateOnlineStatus() {
-  const reallyOnline = await isReallyOnline();
-  
-  if (reallyOnline) {
-    isOnline = true;
-    frappe.show_alert({
-      message: __('Connected to server'),
-      indicator: 'green'
-    });
-    processQueue();
-  } else {
-    isOnline = false;
-    frappe.show_alert({
-      message: __('Cannot connect to server. Working offline.'),
-      indicator: 'orange'
-    });
-  }
-}
-
-// Enhanced event listeners
 window.addEventListener('online', () => {
-  verifyAndUpdateOnlineStatus();
+  isOnline = true;
+  processQueue();
+  showOnlineStatus();
 });
-
 window.addEventListener('offline', () => {
   isOnline = false;
+  showOfflineStatus();
+});
+
+// Show online/offline status
+function showOnlineStatus() {
   frappe.show_alert({
-    message: __('Network disconnected. Working offline.'),
+    message: __('You are back online'),
+    indicator: 'green'
+  });
+}
+
+function showOfflineStatus() {
+  frappe.show_alert({
+    message: __('You are offline. Some features may be limited'),
     indicator: 'orange'
   });
-});
+}
 
 // API wrapper
 export async function apiCall(method, args = {}, options = {}) {
@@ -69,6 +35,7 @@ export async function apiCall(method, args = {}, options = {}) {
   if (!args.pos_profile && method.includes('get_items')) {
     const currentProfile = await PosProfileDB.getCurrentProfile();
     if (currentProfile) {
+      // Stringify the pos_profile object
       args.pos_profile = JSON.stringify(currentProfile);
     } else {
       throw new Error('POS Profile not found. Please open POS from the desk.');
@@ -80,24 +47,24 @@ export async function apiCall(method, args = {}, options = {}) {
     args.pos_profile = JSON.stringify(args.pos_profile);
   }
   
-  const reallyOnline = await isReallyOnline();
-  
-  if (reallyOnline) {
+  if (isOnline) {
     try {
-      console.log('Making API call:', method, 'with args:', args);
+      console.log('Making API call:', method, 'with args:', args); // Debug log
       const response = await frappe.call({
         method,
         args
       });
 
+      // If this is a data sync request, store in IndexedDB
       if (syncData && response.message) {
         await syncToIndexedDB(method, response.message);
       }
 
       return response;
     } catch (error) {
-      console.error('API call failed:', error);
+      console.error('API call failed:', error); // Debug log
       if (isInvoice) {
+        // If invoice creation fails, queue it
         await InvoicesDB.addInvoice({
           method,
           args,
@@ -107,8 +74,9 @@ export async function apiCall(method, args = {}, options = {}) {
       }
       throw error;
     }
-  } else if (offlineSupport || isInvoice) {
+  } else if (offlineSupport || isInvoice) { // Allow offline mode for invoices
     if (isInvoice) {
+      // Store invoice in IndexedDB
       const invoice = {
         method,
         args,
@@ -128,60 +96,7 @@ export async function apiCall(method, args = {}, options = {}) {
     }
     return { offline: true, message: 'App is offline' };
   } else {
-    throw new Error('Cannot connect to server and this operation requires connectivity');
-  }
-}
-
-// Get customer info with offline support
-export async function getCustomerInfo(customer) {
-  try {
-    // Check if we're online
-    if (navigator.onLine) {
-      // Try online first
-      const response = await frappe.call({
-        method: 'posawesome.posawesome.api.posapp.get_customer_info',
-        args: { customer }
-      });
-
-      if (response.message) {
-        // Cache the response in IndexedDB
-        await CustomersDB.saveCustomerInfo(customer, response.message);
-        return response.message;
-      }
-    }
-
-    // If offline or online request failed, try to get from IndexedDB
-    const offlineData = await CustomersDB.getCustomerInfo(customer);
-    if (offlineData) {
-      return offlineData;
-    }
-
-    // If no data found, return default structure
-    return {
-      loyalty_points: null,
-      conversion_factor: null,
-      email_id: null,
-      mobile_no: null,
-      image: null,
-      loyalty_program: null,
-      customer_price_list: null,
-      customer_group: null,
-      customer_type: null,
-      territory: null,
-      birthday: null,
-      gender: null,
-      tax_id: null,
-      posa_discount: null,
-      name: customer,
-      customer_name: null,
-      address_line1: null,
-      city: null,
-      country: null
-    };
-
-  } catch (error) {
-    console.error('Error getting customer info:', error);
-    throw error;
+    throw new Error('App is offline and this operation requires connectivity');
   }
 }
 
@@ -206,147 +121,40 @@ async function syncToIndexedDB(method, data) {
   }
 }
 
-// Process POS Payment with offline support
-export async function processPosPayment(payload) {
-  try {
-    if (navigator.onLine) {
-      // Try online first
-      const response = await frappe.call({
-        method: "posawesome.posawesome.api.payment_entry.process_pos_payment",
-        args: { payload },
-        freeze: true,
-        freeze_message: __("Processing Payment")
-      });
-      
-      return response;
-    } else {
-      // Store payment in IndexedDB for later processing
-      const payment = {
-        method: "posawesome.posawesome.api.payment_entry.process_pos_payment",
-        args: { payload },
-        createdAt: new Date().toISOString(),
-        status: 'pending',
-        retryCount: 0
-      };
-      
-      const id = await InvoicesDB.addInvoice(payment);
-      
-      return {
-        offline: true,
-        queued: true,
-        message: __('Payment saved offline. Will process when online.'),
-        payment_id: id
-      };
-    }
-  } catch (error) {
-    // If online request fails, store for retry
-    if (navigator.onLine) {
-      const payment = {
-        method: "posawesome.posawesome.api.payment_entry.process_pos_payment",
-        args: { payload },
-        createdAt: new Date().toISOString(),
-        status: 'failed',
-        error: error.message,
-        retryCount: 0
-      };
-      
-      const id = await InvoicesDB.addInvoice(payment);
-      
-      return {
-        offline: false,
-        queued: true,
-        message: __('Payment failed. Will retry automatically.'),
-        payment_id: id,
-        error: error.message
-      };
-    }
-    throw error;
-  }
-}
-
-// Process offline queue with enhanced error handling and deduplication
+// Process offline queue
 export async function processQueue() {
-  const reallyOnline = await isReallyOnline();
-  
-  if (!reallyOnline) {
-    console.log('Cannot process queue - no server connectivity');
+  if (!isOnline) {
+    console.log('Still offline, cannot process queue');
     return;
   }
-
+  
+  console.log('Processing offline queue...');
   const pendingInvoices = await InvoicesDB.getPendingInvoices();
-  console.log('Processing queue:', pendingInvoices.length, 'pending items');
-
+  
   for (const invoice of pendingInvoices) {
     try {
-      // Check for duplicates before processing
-      const duplicate = await InvoicesDB.getDuplicateInvoice(
-        invoice.args?.payload?.selected_invoices?.[0]?.name
-      );
-      
-      if (duplicate) {
-        console.log('Skipping duplicate invoice:', invoice.id);
-        await InvoicesDB.updateInvoiceStatus(invoice.id, 'synced', {
-          message: 'Duplicate invoice already processed',
-          reference: duplicate.id
-        });
-        continue;
-      }
-
-      // Make the API call
+      console.log('Processing invoice:', invoice);
       const response = await frappe.call({
         method: invoice.method,
-        args: invoice.args,
-        freeze: false
+        args: invoice.args
       });
-
-      // Handle response
-      if (response.message) {
-        // Check if response indicates invoice was already submitted
-        if (response.message.status === 1 && response.message.message === "Invoice already submitted") {
-          console.log('Invoice already submitted:', invoice.id);
-          await InvoicesDB.updateInvoiceStatus(invoice.id, 'synced', {
-            message: 'Invoice was already submitted',
-            reference: response.message.name
-          });
-        } else {
-          await InvoicesDB.updateInvoiceStatus(invoice.id, 'synced', response.message);
-        }
-        
-        // Show success notification
-        frappe.show_alert({
-          message: __(response.message.message || 'Payment synced successfully'),
-          indicator: 'green'
-        });
-      }
-    } catch (error) {
-      console.error('Error processing invoice:', invoice.id, error);
       
-      // Increment retry count
-      const newRetryCount = (invoice.retry_count || 0) + 1;
-      const status = newRetryCount >= 5 ? 'max_retries_reached' : 'failed';
+      await InvoicesDB.updateInvoiceStatus(invoice.id, 'synced', response);
       
-      await InvoicesDB.updateInvoiceStatus(
-        invoice.id,
-        status,
-        null,
-        newRetryCount,
-        error
-      );
-
-      // Show error notification
       frappe.show_alert({
-        message: __('Error syncing payment. Will retry later.'),
+        message: __('Offline invoice synced successfully'),
+        indicator: 'green'
+      });
+    } catch (error) {
+      console.error('Failed to sync invoice:', error);
+      await InvoicesDB.updateInvoiceStatus(invoice.id, 'error', error.message);
+      
+      frappe.show_alert({
+        message: __('Failed to sync offline invoice: ') + error.message,
         indicator: 'red'
       });
     }
   }
-
-  // Get sync stats after processing
-  const stats = await InvoicesDB.getSyncStats();
-  console.log('Sync stats:', stats);
-
-  // Clean up old synced invoices
-  await InvoicesDB.clearSyncedInvoices();
 }
 
 // Initial data sync

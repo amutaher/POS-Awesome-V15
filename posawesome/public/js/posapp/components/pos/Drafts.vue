@@ -54,7 +54,6 @@ export default {
     singleSelect: true,
     selected: [],
     dialog_data: {},
-    invoice_doc: null,
     headers: [
       {
         title: __('Customer'),
@@ -204,128 +203,24 @@ export default {
       });
     },
 
-    initializeInvoiceData(invoice) {
-      try {
-        if (!invoice) {
-          throw new Error('Invalid invoice data');
-        }
+    submit_dialog() {
 
-        // Initialize required properties
-        const initializedInvoice = {
-          doctype: 'Sales Invoice',
-          docstatus: 0,
-          is_pos: 1,
-          company: invoice.company || '',
-          posting_date: invoice.posting_date || frappe.datetime.nowdate(),
-          posting_time: invoice.posting_time || frappe.datetime.now_time(),
-          customer: invoice.customer || '',
-          customer_name: invoice.customer_name || '',
-          payments: Array.isArray(invoice.payments) ? invoice.payments : [],
-          items: Array.isArray(invoice.items) ? invoice.items : [],
-          is_return: invoice.is_return || false,
-          return_against: invoice.return_against || '',
-          grand_total: invoice.grand_total || 0,
-          rounded_total: invoice.rounded_total || invoice.grand_total || 0,
-          total_taxes_and_charges: invoice.total_taxes_and_charges || 0,
-          discount_amount: invoice.discount_amount || 0,
-          additional_discount_percentage: invoice.additional_discount_percentage || 0,
-          status: 'Draft'
-        };
-
-        // Initialize items with required fields
-        initializedInvoice.items = initializedInvoice.items.map(item => ({
-          doctype: 'Sales Invoice Item',
-          item_code: item.item_code || '',
-          item_name: item.item_name || '',
-          description: item.description || '',
-          qty: item.qty || 0,
-          rate: item.rate || 0,
-          amount: item.amount || 0,
-          actual_qty: item.actual_qty || 0,
-          stock_qty: item.stock_qty || 0,
-          uom: item.uom || '',
-          conversion_factor: item.conversion_factor || 1,
-          stock_uom: item.stock_uom || '',
-          discount_percentage: item.discount_percentage || 0,
-          discount_amount: item.discount_amount || 0,
-          warehouse: item.warehouse || ''
-        }));
-
-        // Initialize payments with required fields
-        initializedInvoice.payments = initializedInvoice.payments.map(payment => ({
-          doctype: 'Sales Invoice Payment',
-          mode_of_payment: payment.mode_of_payment || '',
-          amount: payment.amount || 0,
-          account: payment.account || '',
-          type: payment.type || 'Receive'
-        }));
-
-        return initializedInvoice;
-      } catch (error) {
-        console.error('Error initializing invoice:', error);
-        throw error;
+      if (this.selected.length > 0) {
+        this.eventBus.emit('load_invoice', this.selected[0]);
+        this.draftsDialog = false;
+      }
+      else {
+        this.eventBus.emit("show_message", {
+          title: `Select an invoice to load`,
+          color: "error",
+        });
       }
     },
-
-    submit_dialog() {
-      try {
-        if (this.selected.length === 0) {
-          this.showError('Select an invoice to load');
-          return;
-        }
-
-        // Get selected invoice and initialize its data
-        const invoice = this.initializeInvoiceData(this.selected[0]);
-
-        // Check online/offline status
-        const isOnline = navigator.onLine;
-
-        if (!isOnline) {
-          // For offline mode, prepare offline data and show payment card
-          const offlineData = {
-            offline: true,
-            invoice_data: {
-              ...invoice,
-              items_count: invoice.items.length,
-              grand_total: invoice.grand_total,
-              currency: invoice.currency
-            }
-          };
-          
-          // Emit event for offline handling
-          this.eventBus.emit('show_payment_dialog', offlineData);
-          
-        } else {
-          // For online mode, show payments table
-          this.eventBus.emit('show_payments_table', {
-            offline: false,
-            invoice_doc: invoice
-          });
-        }
-
-        // Close drafts dialog
-        this.draftsDialog = false;
-        this.showSuccess('Invoice loaded successfully');
-
-      } catch (error) {
-        console.error('Error in submit_dialog:', error);
-        this.showError(error.message || 'Failed to load invoice');
-      }
-    }
   },
   created: function () {
     this.eventBus.on('open_drafts', (data) => {
-      try {
-        if (!data) {
-          throw new Error('No draft data received');
-        }
-        this.draftsDialog = true;
-        this.dialog_data = data;
-        this.selected = [];
-      } catch (error) {
-        console.error('Error in open_drafts event:', error);
-        this.showError(error.message);
-      }
+      this.draftsDialog = true;
+      this.dialog_data = data;
     });
   },
   beforeUnmount() {

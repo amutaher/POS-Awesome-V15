@@ -136,60 +136,25 @@ export default {
       });
     },
     submit_dialog() {
-      // Validate required fields
       if (!this.payments_methods.length || !this.company || !this.pos_profile) {
-        this.eventBus.emit('show_message', {
-          title: __('Please fill all required fields'),
-          color: 'error'
-        });
         return;
       }
-
-      // Set loading state
       this.is_loading = true;
-      
-      // Create opening voucher
-      frappe.call({
-        method: 'posawesome.posawesome.api.posapp.create_opening_voucher',
-        args: {
+      var vm = this;
+      return frappe
+        .call('posawesome.posawesome.api.posapp.create_opening_voucher', {
           pos_profile: this.pos_profile,
           company: this.company,
           balance_details: this.payments_methods,
-        },
-        callback: (r) => {
-          // Reset loading state
-          this.is_loading = false;
-
+        })
+        .then((r) => {
           if (r.message) {
-            // Initialize POS data
-            this.eventBus.emit('register_pos_data', r.message);
-            this.eventBus.emit('set_company', r.message.company);
-            
-            // Show success message
-            this.eventBus.emit('show_message', {
-              title: __('POS Opening Shift created successfully'),
-              color: 'success'
-            });
-            
-            // Close dialog
-            this.close_opening_dialog();
-          } else {
-            // Show error message
-            this.eventBus.emit('show_message', {
-              title: __('Failed to create POS Opening Shift'),
-              color: 'error'
-            });
+            vm.eventBus.emit('register_pos_data', r.message);
+            vm.eventBus.emit('set_company', r.message.company);
+            vm.close_opening_dialog();
+            is_loading = false;
           }
-        },
-        error: (err) => {
-          // Reset loading state and show error
-          this.is_loading = false;
-          this.eventBus.emit('show_message', {
-            title: __('Error creating POS Opening Shift: ') + (err.message || ''),
-            color: 'error'
-          });
-        }
-      });
+        });
     },
     go_desk() {
       frappe.set_route('/');

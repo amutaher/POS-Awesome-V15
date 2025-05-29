@@ -478,7 +478,6 @@ export default {
       invoice_posting_date: false, // Posting date dialog
       posting_date: frappe.datetime.nowdate(), // Invoice posting date
       posting_date_menu: false, // Posting date menu visibility
-      locally_canceled: false, // Track if invoice is canceled locally
       items_headers: [
         // Table headers for items
         {
@@ -853,13 +852,6 @@ export default {
 
     // Reset all invoice fields to default/empty values
     clear_invoice() {
-      // Clear draft states for all items
-      if (this.items && this.items.length) {
-        this.items.forEach(item => {
-          this.clear_item_draft_state(item);
-        });
-      }
-
       this.items = [];
       this.posa_offers = [];
       this.expanded = [];
@@ -874,8 +866,6 @@ export default {
       this.selected_delivery_charge = "";
       // Reset posting date to today
       this.posting_date = frappe.datetime.nowdate();
-      // Reset locally canceled flag
-      this.locally_canceled = false;
 
       // Always reset to default customer after invoice
       this.customer = this.pos_profile.customer;
@@ -910,152 +900,114 @@ export default {
 
     // Cancel the current invoice, optionally delete from backend
     async cancel_invoice() {
-      try {
-        const doc = this.get_invoice_doc();
-        this.invoiceType = this.pos_profile.posa_default_sales_order
-          ? "Order"
-          : "Invoice";
-        this.invoiceTypes = ["Invoice", "Order"];
-        this.posting_date = frappe.datetime.nowdate();
-        
-        // Mark as locally canceled
-        this.locally_canceled = true;
-        doc.locally_canceled = true;
-        
-        // Check if we're online and have permission to delete
-        if (navigator.onLine && doc.name && this.pos_profile.posa_allow_delete) {
-          try {
-            const result = await frappe.call({
-              method: "posawesome.posawesome.api.posapp.delete_invoice",
-              args: { invoice: doc.name },
-              async: true
-            });
-            
-            if (result.message) {
-              this.eventBus.emit("show_message", {
-                text: result.message,
+      const doc = this.get_invoice_doc();
+      this.invoiceType = this.pos_profile.posa_default_sales_order
+        ? "Order"
+        : "Invoice";
+      this.invoiceTypes = ["Invoice", "Order"];
+      this.posting_date = frappe.datetime.nowdate();
+      var vm = this;
+      if (doc.name && this.pos_profile.posa_allow_delete) {
+        await frappe.call({
+          method: "posawesome.posawesome.api.posapp.delete_invoice",
+          args: { invoice: doc.name },
+          async: true,
+          callback: function (r) {
+            if (r.message) {
+              vm.eventBus.emit("show_message", {
+                text: r.message,
                 color: "warning",
               });
             }
-          } catch (error) {
-            console.error('Failed to delete invoice:', error);
-            // Store for later sync
-            const pendingCancellations = JSON.parse(localStorage.getItem('pending_cancellations') || '[]');
-            pendingCancellations.push({
-              invoice_name: doc.name,
-              timestamp: new Date().toISOString()
-            });
-            localStorage.setItem('pending_cancellations', JSON.stringify(pendingCancellations));
-            
-            this.eventBus.emit("show_message", {
-              text: "Invoice marked for cancellation when online",
-              color: "info",
-            });
-          }
-        } else if (!navigator.onLine) {
-          // Store for later sync
-          const pendingCancellations = JSON.parse(localStorage.getItem('pending_cancellations') || '[]');
-          if (doc.name) {
-            pendingCancellations.push({
-              invoice_name: doc.name,
-              timestamp: new Date().toISOString()
-            });
-            localStorage.setItem('pending_cancellations', JSON.stringify(pendingCancellations));
-          }
-          
-          this.eventBus.emit("show_message", {
-            text: "Invoice marked for cancellation when online",
-            color: "info",
-          });
-        }
-        
-        this.clear_invoice();
-        this.cancel_dialog = false;
-      } catch (error) {
-        console.error('Cancel invoice error:', error);
-        this.eventBus.emit("show_message", {
-          text: "Failed to cancel invoice: " + error.message,
-          color: "error",
+          },
         });
       }
+      this.clear_invoice()
+      this.cancel_dialog = false;
     },
 
     // Load an invoice (or return invoice) from data, set all fields accordingly
     async load_invoice(data = {}) {
-      try {
-        console.log("load_invoice called with data:", {
-          is_return: data.is_return,
-          return_against: data.return_against,
-          customer: data.customer,
-          items_count: data.items ? data.items.length : 0
-        });
-        
-        // Validate invoice data
-        if (!data) {
-          throw new Error('Invalid invoice data received');
+      console.log("load_invoice called with data:", {
+        is_return: data.is_return,
+        return_against: data.return_against,
+        customer: data.customer,
+        items_count: data.items ? data.items.length : 0
+      });
+      
+      this.clear_invoice()
+      if (data.is_return) {
+        console.log("Processing return invoice");
+        // For return without invoice case, check if there's a return_against
+        // Only set customer readonly if this is a return with reference to an invoice
+        if (data.return_against) {
+          console.log("Return has reference to invoice:", data.return_against);
+          this.eventBus.emit("set_customer_readonly", true);
+        } else {
+          console.log("Return without invoice reference, customer can be selected");
+          // Allow customer selection for returns without invoice
+          this.eventBus.emit("set_customer_readonly", false);
         }
-
-        // Initialize required properties if not present
-        data.payments = data.payments || [];
-        data.items = data.items || [];
-        data.is_return = data.is_return || false;
-        data.grand_total = data.grand_total || 0;
-        data.rounded_total = data.rounded_total || data.grand_total;
-        data.total_taxes_and_charges = data.total_taxes_and_charges || 0;
-        data.discount_amount = data.discount_amount || 0;
-        data.additional_discount_percentage = data.additional_discount_percentage || 0;
-
-        // Validate items
-        if (!Array.isArray(data.items)) {
-          throw new Error('Invalid items data');
-        }
-
-        // Validate payments
-        if (!Array.isArray(data.payments)) {
-          throw new Error('Invalid payments data');
-        }
-
-        // Load invoice data
-        this.invoice_doc = data;
-        this.return_doc = null;
-        this.invoice_doc.doctype = 'Sales Invoice';
-        this.invoice_doc.is_pos = 1;
-        this.invoice_doc.is_return = data.is_return || 0;
-        this.invoice_doc.return_against = data.return_against || '';
-        this.invoice_doc.pos_profile = this.pos_profile.name;
-        this.invoice_doc.company = this.pos_profile.company;
-        this.invoice_doc.currency = this.pos_profile.currency;
-        this.invoice_doc.conversion_rate = 1;
-        this.invoice_doc.selling_price_list = this.pos_profile.selling_price_list;
-        this.invoice_doc.plc_conversion_rate = 1;
-        this.invoice_doc.status = 'Draft';
-        this.invoice_doc.items = data.items;
-        this.invoice_doc.payments = data.payments;
-
-        // Update UI
-        this.update_items();
-        this.update_totals();
-        this.update_discount();
-        this.update_taxes();
-        this.update_grand_total();
-
-        // Show success message
-        this.eventBus.emit('show_message', {
-          title: __('Invoice loaded successfully'),
-          color: 'success'
-        });
-
-      } catch (error) {
-        console.error('Error loading invoice:', error);
-        this.eventBus.emit('show_message', {
-          title: __('Failed to load invoice: ') + error.message,
-          color: 'error'
-        });
-        
-        // Reset invoice state
-        this.invoice_doc = null;
-        this.return_doc = null;
+        this.invoiceType = "Return";
+        this.invoiceTypes = ["Return"];
       }
+      
+      this.invoice_doc = data;
+      this.items = data.items || [];
+      console.log("Items set:", this.items.length, "items");
+      
+      if (this.items.length > 0) {
+        this.update_items_details(this.items);
+        this.posa_offers = data.posa_offers || [];
+        this.items.forEach((item) => {
+          if (!item.posa_row_id) {
+            item.posa_row_id = this.makeid(20);
+          }
+          if (item.batch_no) {
+            this.set_batch_qty(item, item.batch_no);
+          }
+        });
+      } else {
+        console.log("Warning: No items in return invoice");
+      }
+      
+      this.customer = data.customer;
+      this.posting_date = data.posting_date || frappe.datetime.nowdate();
+      this.discount_amount = data.discount_amount;
+      this.additional_discount_percentage =
+        data.additional_discount_percentage;
+        
+      if (this.items.length > 0) {
+        this.items.forEach((item) => {
+          if (item.serial_no) {
+            item.serial_no_selected = [];
+            const serial_list = item.serial_no.split("\n");
+            serial_list.forEach((element) => {
+              if (element.length) {
+                item.serial_no_selected.push(element);
+              }
+            });
+            item.serial_no_selected_count = item.serial_no_selected.length;
+          }
+        });
+      }
+      
+      if (data.is_return) {
+        console.log("Setting return values for discounts");
+        this.discount_amount = -data.discount_amount;
+        this.additional_discount_percentage =
+          -data.additional_discount_percentage;
+        this.return_doc = data;
+      } else {
+        this.eventBus.emit("set_pos_coupons", data.posa_coupons);
+      }
+      
+      console.log("load_invoice completed, invoice state:", {
+        invoiceType: this.invoiceType,
+        is_return: this.invoice_doc.is_return,
+        items: this.items.length,
+        customer: this.customer
+      });
     },
 
     // Save and clear the current invoice (draft logic)
@@ -1260,10 +1212,8 @@ export default {
       doc.plc_conversion_rate = doc.conversion_rate;
       doc.ignore_default_fields = 1;  // Add this to prevent default field updates
       
-      // Add custom fields to track offer rates, cancellation status and draft states
+      // Add custom fields to track offer rates
       doc.posa_is_offer_applied = this.posa_offers.length > 0 ? 1 : 0;
-      doc.locally_canceled = this.locally_canceled;
-      doc.posa_item_drafts = this.invoice_doc?.posa_item_drafts || {};
       
       // Calculate base amounts using the exchange rate
       if (this.selected_currency !== this.pos_profile.currency) {
@@ -1546,18 +1496,10 @@ export default {
             message: 'Invoice updated offline'
           };
         }
-        if (!invoice) {
-          throw new Error('No invoice data provided');
-        }
-        console.log('Updating invoice with data:', invoice);
         const result = await frappe.call({
           method: 'posawesome.posawesome.api.posapp.update_invoice',
-          args: { data: JSON.stringify(invoice) },
+          args: { invoice },
         });
-        if (!result || !result.message) {
-          throw new Error('Failed to update invoice: No response from server');
-        }
-        console.log('Invoice update result:', result);
         return result;
       } catch (error) {
         console.error('Update invoice error:', error);
@@ -1578,7 +1520,7 @@ export default {
       frappe.call({
         method: "posawesome.posawesome.api.posapp.update_invoice_from_order",
         args: {
-          data: JSON.stringify(doc),  // Stringify the doc data
+          data: doc,
         },
         async: false,
         callback: function (r) {
@@ -1601,14 +1543,7 @@ export default {
             message: 'Invoice processed offline'
           };
         }
-        const doc = this.get_invoice_doc();
-        if (!doc) {
-          throw new Error('No invoice data found');
-        }
-        const result = await this.update_invoice(doc);
-        if (!result || !result.message) {
-          throw new Error('Failed to update invoice');
-        }
+        const result = await this.update_invoice(this.invoice);
         return result;
       } catch (error) {
         console.error('Process invoice error:', error);
@@ -1661,66 +1596,84 @@ export default {
       try {
         console.log('Starting show_payment process');
         
-        // Check if there are items
-        if (!this.items || this.items.length === 0) {
-          this.showError('Please add items to the invoice');
-          return;
-        }
-
-        // Get current invoice data using get_invoice_doc
-        const doc = this.get_invoice_doc();
+        // Get current invoice data
+        const invoice_data = {
+          items_count: this.items.length,
+          customer: this.customer,
+          is_return: this.invoice_doc ? this.invoice_doc.is_return : false,
+          currency: this.selected_currency || this.pos_profile.currency,
+          grand_total: this.subtotal
+        };
         
-        // Validate invoice doc
-        if (!doc) {
-          this.showError('Failed to prepare invoice data');
-          return;
-        }
+        console.log('Invoice state before payment:', invoice_data);
 
         // Basic validations
-        if (!doc.customer) {
+        if (!invoice_data.customer) {
           this.showError('Select a customer');
           return;
         }
 
-        // Check online/offline status
-        const isOnline = navigator.onLine;
+        if (!invoice_data.items_count) {
+          this.showError('No items in invoice');
+          return;
+        }
+
+        console.log('Basic validations passed, proceeding to main validation');
         
-        if (!isOnline) {
-          // For offline mode, prepare offline data and show payment card
-          const offlineData = {
-            offline: true,
-            invoice_data: {
-              ...doc,
-              items_count: this.items.length,
-              grand_total: this.subtotal,
-              currency: this.selected_currency || this.pos_profile.currency
-            }
-          };
-          
-          // Emit event for offline handling
-          this.eventBus.emit('show_payment_dialog', offlineData);
-          
-        } else {
-          // For online mode, update invoice first
-          const result = await this.update_invoice(doc);
-          
-          if (!result || !result.message) {
-            this.showError('Failed to update invoice');
-            return;
-          }
-          
-          // Ensure payments array exists
-          if (!result.message.payments) {
-            result.message.payments = [];
-          }
-          
-          // For online mode, emit different event to show payments table
-          this.eventBus.emit('show_payments_table', {
-            offline: false,
-            invoice_doc: result.message
-          });
+        // Skip online validations in offline mode
+        let isValid = true;
+        if (navigator.onLine) {
+          isValid = await this.validate();
+          console.log('Main validation result:', isValid);
         }
         
+        if (!isValid) {
+          return;
+        }
+
+        // Process based on invoice type
+        if (invoice_data.is_return) {
+          if (!navigator.onLine) {
+            this.showError('Return invoices cannot be processed offline');
+            return;
+          }
+          console.log('Processing return invoice');
+          await this.process_return();
+        } else {
+          console.log('Processing regular invoice');
+          
+          // Show payment dialog
+          console.log('Showing payment dialog with currency:', invoice_data.currency);
+          
+          if (!navigator.onLine) {
+            // For offline mode, prepare offline payment data
+            const payments = [{
+              mode_of_payment: 'Cash',
+              amount: invoice_data.grand_total,
+              currency: invoice_data.currency
+            }];
+            invoice_data.payments = payments;
+            
+            // Emit event with offline flag
+            this.eventBus.emit('show_payment', {
+              offline: true,
+              invoice_data: invoice_data
+            });
+          } else {
+            // For online mode, prepare invoice doc
+            const invoice_doc = await this.process_invoice();
+            if (!invoice_doc) {
+              this.showError('Failed to process invoice');
+              return;
+            }
+            
+            // Emit event with online data
+            this.eventBus.emit('show_payment', {
+              offline: false,
+              invoice_doc: invoice_doc
+            });
+          }
+        }
       } catch (error) {
         console.error('Show payment error:', error);
         if (!navigator.onLine) {
@@ -1922,31 +1875,7 @@ export default {
 
     // Close payment dialog
     close_payments() {
-      try {
-        // Validate invoice state
-        if (!this.invoice_doc) {
-          console.warn('No active invoice when closing payments');
-          this.eventBus.emit('show_message', {
-            title: __('No active invoice'),
-            color: 'warning'
-          });
-          return;
-        }
-
-        // Reset payment related state
-        this.payment_dialog = false;
-        this.selected_payment_mode = null;
-        
-        // Emit event to close payment dialog
-        this.eventBus.emit('show_payment', false);
-        
-      } catch (error) {
-        console.error('Error closing payments:', error);
-        this.eventBus.emit('show_message', {
-          title: __('Error closing payment dialog: ') + error.message,
-          color: 'error'
-        });
-      }
+      this.eventBus.emit("show_payment", "false");
     },
 
     async update_items_details() {
@@ -2326,26 +2255,6 @@ export default {
           item.base_discount_amount = item.price_list_rate;
           item.discount_percentage = 100;
         }
-
-        // Calculate final amounts
-        item.amount = this.flt(item.qty * item.rate, this.currency_precision);
-        item.base_amount = this.flt(item.qty * item.base_rate, this.currency_precision);
-
-        // Store original values before saving draft state
-        const original_rate = item.rate;
-        const original_base_rate = item.base_rate;
-        const original_discount_amount = item.discount_amount;
-        const original_base_discount_amount = item.base_discount_amount;
-        const original_discount_percentage = item.discount_percentage;
-
-        // Save computed values to draft state
-        this.save_item_draft_state(item, {
-          rate: original_rate,
-          base_rate: original_base_rate,
-          discount_amount: original_discount_amount,
-          base_discount_amount: original_base_discount_amount,
-          discount_percentage: original_discount_percentage
-        });
 
         // Update stock calculations and force UI update
         this.calc_stock_qty(item, item.qty);
@@ -4209,222 +4118,6 @@ export default {
         color: "error"
       });
     },
-
-    // Save item's computed values to draft state
-    save_item_draft_state(item, original_values = null) {
-      try {
-        // Get current timestamp
-        const timestamp = new Date().toISOString();
-        
-        // Create draft state object
-        const draft_state = {
-          timestamp,
-          item_code: item.item_code,
-          posa_row_id: item.posa_row_id,
-          rate: item.rate,
-          base_rate: item.base_rate,
-          price_list_rate: item.price_list_rate,
-          base_price_list_rate: item.base_price_list_rate,
-          discount_amount: item.discount_amount,
-          base_discount_amount: item.base_discount_amount,
-          discount_percentage: item.discount_percentage,
-          qty: item.qty,
-          amount: item.amount,
-          base_amount: item.base_amount,
-          original_values
-        };
-
-        // Store in localStorage with unique key
-        const draft_key = `posa_item_draft_${item.posa_row_id}`;
-        localStorage.setItem(draft_key, JSON.stringify(draft_state));
-
-        // Also store in invoice_doc for backend sync
-        if (this.invoice_doc) {
-          if (!this.invoice_doc.posa_item_drafts) {
-            this.invoice_doc.posa_item_drafts = {};
-          }
-          this.invoice_doc.posa_item_drafts[item.posa_row_id] = draft_state;
-        }
-
-        console.log(`Saved draft state for item ${item.item_code}:`, draft_state);
-      } catch (error) {
-        console.error('Error saving item draft state:', error);
-      }
-    },
-
-    // Restore item's draft state if available
-    restore_item_draft_state(item) {
-      try {
-        const draft_key = `posa_item_draft_${item.posa_row_id}`;
-        const stored_draft = localStorage.getItem(draft_key);
-        
-        if (stored_draft) {
-          const draft_state = JSON.parse(stored_draft);
-          
-          // Check if draft is still valid (not too old)
-          const draft_time = new Date(draft_state.timestamp).getTime();
-          const current_time = new Date().getTime();
-          const time_diff = current_time - draft_time;
-          
-          // If draft is less than 24 hours old, restore it
-          if (time_diff < 24 * 60 * 60 * 1000) {
-            // Restore values
-            item.rate = draft_state.rate;
-            item.base_rate = draft_state.base_rate;
-            item.price_list_rate = draft_state.price_list_rate;
-            item.base_price_list_rate = draft_state.base_price_list_rate;
-            item.discount_amount = draft_state.discount_amount;
-            item.base_discount_amount = draft_state.base_discount_amount;
-            item.discount_percentage = draft_state.discount_percentage;
-            item.qty = draft_state.qty;
-            item.amount = draft_state.amount;
-            item.base_amount = draft_state.base_amount;
-            
-            console.log(`Restored draft state for item ${item.item_code}:`, draft_state);
-            return true;
-          } else {
-            // Remove expired draft
-            localStorage.removeItem(draft_key);
-          }
-        }
-        return false;
-      } catch (error) {
-        console.error('Error restoring item draft state:', error);
-        return false;
-      }
-    },
-
-    // Clear item's draft state
-    clear_item_draft_state(item) {
-      try {
-        const draft_key = `posa_item_draft_${item.posa_row_id}`;
-        localStorage.removeItem(draft_key);
-        
-        if (this.invoice_doc?.posa_item_drafts) {
-          delete this.invoice_doc.posa_item_drafts[item.posa_row_id];
-        }
-      } catch (error) {
-        console.error('Error clearing item draft state:', error);
-      }
-    },
-
-    async submit_invoice(data = {}, print = false) {
-      try {
-        if (!this.invoice_doc) {
-          throw new Error('No invoice to submit');
-        }
-
-        // Ensure required fields are set
-        const submissionData = {
-          doctype: 'Sales Invoice',  // Set main doctype
-          docstatus: 0,
-          is_pos: 1,
-          company: this.invoice_doc.company,
-          posting_date: this.invoice_doc.posting_date || frappe.datetime.nowdate(),
-          posting_time: this.invoice_doc.posting_time || frappe.datetime.now_time(),
-          customer: this.invoice_doc.customer,
-          customer_name: this.invoice_doc.customer_name,
-          items: this.invoice_doc.items.map(item => ({
-            doctype: 'Sales Invoice Item',  // Set item doctype
-            item_code: item.item_code,
-            item_name: item.item_name,
-            description: item.description,
-            qty: item.qty,
-            rate: item.rate,
-            amount: item.amount,
-            uom: item.uom,
-            conversion_factor: item.conversion_factor || 1,
-            stock_uom: item.stock_uom,
-            warehouse: item.warehouse
-          })),
-          payments: this.invoice_doc.payments.map(payment => ({
-            doctype: 'Sales Invoice Payment',  // Set payment doctype
-            mode_of_payment: payment.mode_of_payment,
-            amount: payment.amount,
-            account: payment.account,
-            type: payment.type || 'Receive'
-          })),
-          taxes: (this.invoice_doc.taxes || []).map(tax => ({
-            doctype: 'Sales Taxes and Charges',  // Set tax doctype
-            charge_type: tax.charge_type,
-            account_head: tax.account_head,
-            description: tax.description,
-            rate: tax.rate,
-            tax_amount: tax.tax_amount,
-            total: tax.total,
-            base_tax_amount: tax.base_tax_amount,
-            base_total: tax.base_total
-          })),
-          is_return: this.invoice_doc.is_return || false,
-          return_against: this.invoice_doc.return_against || '',
-          total_taxes_and_charges: this.invoice_doc.total_taxes_and_charges || 0,
-          discount_amount: this.invoice_doc.discount_amount || 0,
-          additional_discount_percentage: this.invoice_doc.additional_discount_percentage || 0,
-          grand_total: this.invoice_doc.grand_total,
-          rounded_total: this.invoice_doc.rounded_total || this.invoice_doc.grand_total,
-          status: 'Draft',
-          ...this.invoice_doc,  // Merge existing invoice data
-          ...data  // Merge additional data
-        };
-
-        // Validate required fields
-        const requiredFields = ['doctype', 'company', 'customer', 'items'];
-        for (const field of requiredFields) {
-          if (!submissionData[field]) {
-            throw new Error(`${field} is required`);
-          }
-        }
-
-        // Validate items
-        if (!submissionData.items.length) {
-          throw new Error('No items in invoice');
-        }
-
-        for (const item of submissionData.items) {
-          if (!item.doctype || !item.item_code || !item.qty || !item.rate) {
-            throw new Error('Item doctype, code, quantity and rate are required for all items');
-          }
-        }
-
-        // Validate payments
-        if (submissionData.payments) {
-          for (const payment of submissionData.payments) {
-            if (!payment.doctype || !payment.mode_of_payment || !payment.amount) {
-              throw new Error('Payment doctype, mode and amount are required for all payments');
-            }
-          }
-        }
-
-        // Submit invoice
-        const result = await frappe.call({
-          method: 'posawesome.posawesome.api.posapp.submit_invoice',
-          args: { 
-            invoice: JSON.stringify(submissionData),
-            data: JSON.stringify(data)
-          }
-        });
-
-        if (!result.message) {
-          throw new Error('Failed to submit invoice');
-        }
-
-        // Show success message
-        this.eventBus.emit('show_message', {
-          title: __('Invoice submitted successfully'),
-          color: 'success'
-        });
-
-        return result.message;
-
-      } catch (error) {
-        console.error('Error submitting invoice:', error);
-        this.eventBus.emit('show_message', {
-          title: __('Failed to submit invoice: ') + error.message,
-          color: 'error'
-        });
-        throw error;
-      }
-    }
   },
 
   mounted() {

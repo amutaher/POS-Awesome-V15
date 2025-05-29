@@ -242,7 +242,7 @@
 </template>
 
 <script>
-import { processPosPayment } from '../../services/api';
+
 import format from "../../format";
 import Customer from "../pos/Customer.vue";
 import UpdateCustomer from "../pos/UpdateCustomer.vue";
@@ -652,20 +652,16 @@ export default {
       payload.total_selected_mpesa_payments = flt(
         this.total_selected_mpesa_payments
       );
-      
-      processPosPayment(payload)
-        .then((r) => {
+
+      frappe.call({
+        method: "posawesome.posawesome.api.payment_entry.process_pos_payment",
+        args: { payload },
+        freeze: true,
+        freeze_message: __("Processing Payment"),
+        callback: function (r) {
           vm.isSubmitting = false;
-          if (r.message || r.offline) {
-            if (r.offline) {
-              frappe.show_alert({
-                message: r.message,
-                indicator: 'orange'
-              });
-            } else {
-              frappe.utils.play_sound("submit");
-            }
-            
+          if (r.message) {
+            frappe.utils.play_sound("submit");
             vm.clear_all(false);
             vm.customer_name = customer;
             vm.get_outstanding_invoices();
@@ -673,28 +669,23 @@ export default {
             vm.set_mpesa_search_params();
             vm.get_draft_mpesa_payments_register();
           }
-        })
-        .catch((error) => {
+        },
+        error: function() {
           vm.isSubmitting = false;
-          frappe.msgprint({
-            title: __('Payment Failed'),
-            indicator: 'red',
-            message: __(error.message || 'Something went wrong while processing payment')
-          });
-        });
+        }
+      });
     },
     submit_and_print() {
       if (this.isSubmitting) return;
       this.isSubmitting = true;
       const customer = this.customer_name;
       const vm = this;
-      
       if (!customer) {
         this.isSubmitting = false;
         frappe.throw(__("Please select a customer"));
         return;
       }
-
+    
       // Check if we have selected invoices
       if (this.selected_invoices.length == 0) {
         this.isSubmitting = false;
@@ -735,31 +726,28 @@ export default {
         this.total_selected_mpesa_payments
       );
 
-      processPosPayment(payload)
-        .then((r) => {
+      frappe.call({
+        method: "posawesome.posawesome.api.payment_entry.process_pos_payment",
+        args: { payload },
+        freeze: true,
+        freeze_message: __("Processing Payment"),
+        callback: function (r) {
           vm.isSubmitting = false;
-          if (r.message || r.offline) {
-            if (r.offline) {
-              frappe.show_alert({
-                message: r.message,
-                indicator: 'orange'
-              });
-            } else {
-              frappe.utils.play_sound("submit");
-              
-              // Extract payment name from server response
-              const payment_name = r.message.new_payments_entry && r.message.new_payments_entry.length > 0 
-                  ? r.message.new_payments_entry[0].name : null;
-              
-              if (payment_name) {
-                console.log("Opening print view with payment name:", payment_name);
-                this.load_print_page(payment_name);
-              } else {
-                console.log("No payment_name found in response");
-                frappe.msgprint(__("Payment submitted but print function could not be executed. Payment name not found."));
-              }
-            }
+          if (r.message) {
+            console.log("Server response:", JSON.stringify(r.message));
+            frappe.utils.play_sound("submit");
             
+            // Extract payment name from server response
+            const payment_name = r.message.new_payments_entry && r.message.new_payments_entry.length > 0 
+                ? r.message.new_payments_entry[0].name : null;
+            
+            if (payment_name) {
+              console.log("Opening print view with payment name:", payment_name);
+              vm.load_print_page(payment_name);
+            } else {
+              console.log("No payment_name found in response");
+              frappe.msgprint(__("Payment submitted but print function could not be executed. Payment name not found."));
+            }
             vm.clear_all(false);
             vm.customer_name = customer;
             vm.get_outstanding_invoices();
@@ -767,15 +755,11 @@ export default {
             vm.set_mpesa_search_params();
             vm.get_draft_mpesa_payments_register();
           }
-        })
-        .catch((error) => {
+        },
+        error: function() {
           vm.isSubmitting = false;
-          frappe.msgprint({
-            title: __('Payment Failed'),
-            indicator: 'red',
-            message: __(error.message || 'Something went wrong while processing payment')
-          });
-        });
+        }
+      });
     },
     selectSingleInvoice(item) {
       console.log("Row clicked:", item);
@@ -810,86 +794,23 @@ export default {
       return this.isInvoiceSelected(item) ? 'selected-row bg-primary bg-lighten-4' : '';
     },
     
-    async load_print_page(payment_name) {
+    load_print_page(payment_name) {
       if (!payment_name) {
         frappe.msgprint(__("Payment name not found. Cannot open print view."));
         return;
       }
 
-      try {
-        // Verify payment submission status
-        const payment_status = await frappe.db.get_value(
-          'Payment Entry',
-          payment_name,
-          ['docstatus', 'name', 'status'],
-          { cache: false }
-        );
+      // Use simplest URL possible to avoid errors
+      const url = 
+        frappe.urllib.get_base_url() +
+        "/printview?doctype=Payment%20Entry" +
+        "&name=" + payment_name +
+        "&trigger_print=1";
 
-        if (!payment_status || !payment_status.message) {
-          frappe.msgprint(__("Could not verify payment status. Please try printing from the Payment Entry."));
-          return;
-        }
-
-        const { docstatus, status } = payment_status.message;
-
-        // Check if payment is submitted (docstatus = 1)
-        if (docstatus !== 1) {
-          frappe.msgprint(__("Payment {0} is not yet submitted. Please wait and try again.", [payment_name]));
-          
-          // Add to retry queue if needed
-          if (docstatus === 0) {
-            setTimeout(() => this.retryPrintPayment(payment_name), 2000);
-          }
-          return;
-        }
-
-        // Use simplest URL possible to avoid errors
-        const url = 
-          frappe.urllib.get_base_url() +
-          "/printview?doctype=Payment%20Entry" +
-          "&name=" + payment_name +
-          "&trigger_print=1";
-
-        console.log("Opening printing URL:", url);
-        
-        // Open in new window/tab
-        window.open(url, '_blank');
-      } catch (error) {
-        console.error("Error verifying payment status:", error);
-        frappe.msgprint({
-          title: __("Print Error"),
-          message: __("Error verifying payment status. Please try printing from the Payment Entry directly."),
-          indicator: 'red'
-        });
-      }
-    },
-    // Helper function to retry print after delay
-    async retryPrintPayment(payment_name, retryCount = 0) {
-      if (retryCount >= 3) {
-        frappe.msgprint(__("Could not confirm payment submission after multiple attempts. Please try printing from the Payment Entry."));
-        return;
-      }
-
-      try {
-        const payment_status = await frappe.db.get_value(
-          'Payment Entry',
-          payment_name,
-          ['docstatus', 'status'],
-          { cache: false }
-        );
-
-        if (payment_status?.message?.docstatus === 1) {
-          this.load_print_page(payment_name);
-        } else {
-          // Exponential backoff for retry
-          setTimeout(
-            () => this.retryPrintPayment(payment_name, retryCount + 1),
-            Math.pow(2, retryCount + 1) * 1000
-          );
-        }
-      } catch (error) {
-        console.error("Error in retry print:", error);
-      }
+      console.log("Opening printing URL:", url);
+      
+      // Open in new window/tab
+      window.open(url, '_blank');
     },
   },
 

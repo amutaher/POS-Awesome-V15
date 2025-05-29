@@ -276,7 +276,7 @@ export default {
         // Online mode - make API call
         const result = await frappe.call({
           method: 'posawesome.posawesome.api.posapp.update_invoice',
-          args: { data: JSON.stringify(invoice_data) }
+          args: { invoice: invoice_data }
         });
         return result;
       } catch (error) {
@@ -437,71 +437,37 @@ export default {
       });
     },
     async check_opening_entry() {
-      try {
-        // First try to get offline profile
-        if (!this.isOnline) {
-          const offlineProfile = await PosProfileDB.getCurrentProfile();
-          if (offlineProfile) {
-            this.pos_profile = offlineProfile;
-            this.eventBus.emit('register_pos_profile', offlineProfile);
-            return;
-          }
+      if (!this.isOnline) {
+        // Use offline profile if available
+        const offlineProfile = await PosProfileDB.getCurrentProfile();
+        if (offlineProfile) {
+          this.pos_profile = offlineProfile;
+          this.eventBus.emit('register_pos_profile', offlineProfile);
+          return;
         }
-
-        const result = await frappe.call({
-          method: 'posawesome.posawesome.api.posapp.check_opening_shift',
-          args: {
-            user: frappe.session.user
-          }
-        });
-
-        if (result.message) {
-          // First set the pos_profile and opening shift
-          this.pos_profile = result.message.pos_profile;
-          this.pos_opening_shift = result.message.pos_opening_shift;
-          
-          // Emit events only if we have valid data
-          if (this.pos_profile) {
-            // Clone the profile data before saving to IndexedDB
-            const profileToSave = JSON.parse(JSON.stringify({
-              name: this.pos_profile.name,
-              pos_profile_name: this.pos_profile.name,
-              company: this.pos_profile.company,
-              currency: this.pos_profile.currency,
-              payments: this.pos_profile.payments || []
-            }));
-
-            // Save simplified profile for offline use
-            try {
-              await PosProfileDB.savePosProfile(profileToSave);
-            } catch (error) {
-              console.warn('Failed to save profile to IndexedDB:', error);
-              // Continue execution even if IndexedDB save fails
-            }
-
-            // Emit events only once
-            this.eventBus.emit('register_pos_data', result.message);
-            this.eventBus.emit('set_company', result.message.company);
-            
-            // Get offers if profile exists
-            if (this.pos_profile.name) {
-              await this.get_offers(this.pos_profile.name);
-            }
-          } else {
-            this.dialog = true;
-          }
-        } else {
-          this.dialog = true;
-        }
-      } catch (error) {
-        console.error('Error checking opening entry:', error);
-        frappe.msgprint({
-          title: __('Error'),
-          indicator: 'red',
-          message: __('Failed to check opening entry: {0}', [error.message])
-        });
-        this.dialog = true;
       }
+      
+      return frappe
+        .call('posawesome.posawesome.api.posapp.check_opening_shift', {
+          user: frappe.session.user,
+        })
+        .then((r) => {
+          if (r.message) {
+            this.pos_profile = r.message.pos_profile;
+            this.pos_opening_shift = r.message.pos_opening_shift;
+            
+            // Save profile for offline use
+            PosProfileDB.savePosProfile(r.message.pos_profile);
+            
+            this.get_offers(this.pos_profile.name);
+            this.eventBus.emit('register_pos_profile', r.message);
+            this.eventBus.emit('set_company', r.message.company);
+            frappe.realtime.emit('pos_profile_registered');
+            console.info('LoadPosProfile');
+          } else {
+            this.create_opening_voucher();
+          }
+        });
     },
     create_opening_voucher() {
       this.dialog = true;
@@ -612,19 +578,19 @@ export default {
         console.info('LoadPosProfile');
       });
       this.eventBus.on('show_payment', (data) => {
-        this.payment = data === 'true';
-        this.offers = false;
-        this.coupons = false;
+        this.payment = true ? data === 'true' : false;
+        this.offers = false ? data === 'true' : false;
+        this.coupons = false ? data === 'true' : false;
       });
       this.eventBus.on('show_offers', (data) => {
-        this.offers = data === 'true';
-        this.payment = false;
-        this.coupons = false;
+        this.offers = true ? data === 'true' : false;
+        this.payment = false ? data === 'true' : false;
+        this.coupons = false ? data === 'true' : false;
       });
       this.eventBus.on('show_coupons', (data) => {
-        this.coupons = data === 'true';
-        this.offers = false;
-        this.payment = false;
+        this.coupons = true ? data === 'true' : false;
+        this.offers = false ? data === 'true' : false;
+        this.payment = false ? data === 'true' : false;
       });
       this.eventBus.on('open_closing_dialog', () => {
         this.get_closing_data();
@@ -652,28 +618,6 @@ export default {
     window.removeEventListener('online', this.setupNetworkListeners);
     window.removeEventListener('offline', this.setupNetworkListeners);
   },
-  created() {
-    this.eventBus.on('show_payments_table', () => {
-      this.payment = true;
-      this.offers = false;
-      this.coupons = false;
-    });
-
-    this.eventBus.on('close_payments', () => {
-      this.payment = false;
-    });
-
-    this.eventBus.on('show_payment_dialog', () => {
-      this.payment = true;
-      this.offers = false;
-      this.coupons = false;
-    });
-  },
-  beforeUnmount() {
-    this.eventBus.off('show_payments_table');
-    this.eventBus.off('close_payments');
-    this.eventBus.off('show_payment_dialog');
-  }
 };
 </script>
 
