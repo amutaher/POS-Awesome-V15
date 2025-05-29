@@ -1,20 +1,33 @@
 import { createVuetify } from 'vuetify';
 import { createApp } from 'vue';
+import { registerSW } from 'virtual:pwa-register';
 import eventBus from './bus';
 import * as components from 'vuetify/components'
 import * as directives from 'vuetify/directives'
 import Home from './Home.vue';
 
-frappe.provide('frappe.PosApp');
+// Register service worker
+const updateSW = registerSW({
+    onNeedRefresh() {
+        // Show a prompt to user about new version
+        if (confirm('New version available. Update?')) {
+            updateSW();
+        }
+    },
+    onOfflineReady() {
+        console.log('App ready to work offline');
+    },
+});
 
+frappe.provide('frappe.PosApp');
 
 frappe.PosApp.posapp = class {
     constructor({ parent }) {
         this.$parent = $(document);
         this.page = parent.page;
         this.make_body();
-
     }
+    
     make_body() {
         this.$el = this.$parent.find('.main-section');
         const vuetify = createVuetify(
@@ -49,8 +62,7 @@ frappe.PosApp.posapp = class {
         app.use(vuetify)
         app.mount(this.$el[0]);
     }
+    
     setup_header() {
-
     }
-
 };
