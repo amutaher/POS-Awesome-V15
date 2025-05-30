@@ -22,6 +22,7 @@ export default defineConfig({
     vue(),
     VitePWA({
       injectRegister: 'auto',
+      devOptions: { enabled: false },
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'logo.png'],
       manifest: {
