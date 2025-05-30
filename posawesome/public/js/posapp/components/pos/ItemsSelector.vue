@@ -162,7 +162,7 @@ export default {
     show_coupons() {
       this.eventBus.emit("show_coupons", "true");
     },
-    get_items() {
+    async get_items() {
       if (!this.pos_profile) {
         console.error("No POS Profile");
         return;
@@ -189,70 +189,93 @@ export default {
       if (vm.item_group != "ALL") {
         gr = vm.item_group.toLowerCase();
       }
-      if (
-        vm.pos_profile.posa_local_storage &&
-        localStorage.items_storage &&
-        !vm.pos_profile.pose_use_limit_search
-      ) {
-        vm.items = JSON.parse(localStorage.getItem("items_storage"));
-        this.eventBus.emit("set_all_items", vm.items);
-        vm.loading = false;
-        vm.items_loaded = true;
-        
-        // Even when loading from localStorage, refresh the quantities
-        setTimeout(() => {
-          if (vm.filtered_items && vm.filtered_items.length > 0) {
-            vm.update_items_details(vm.filtered_items);
-          }
-        }, 300);
-      }
-      frappe.call({
-        method: "posawesome.posawesome.api.posapp.get_items",
-        args: {
-          pos_profile: vm.pos_profile,
-          price_list: vm.customer_price_list,
-          item_group: gr,
-          search_value: sr,
-          customer: vm.customer,
-        },
-        callback: function (r) {
-          if (r.message) {
-            vm.items = r.message;
+
+      // First try to get items from IndexedDB if offline
+      if (navigator.onLine === false) {
+        try {
+          const cachedItems = await this.$store.dispatch('indexedDB/getCachedItems');
+          if (cachedItems && cachedItems.length > 0) {
+            vm.items = cachedItems;
             vm.eventBus.emit("set_all_items", vm.items);
             vm.loading = false;
             vm.items_loaded = true;
-            console.info("Items Loaded");
-            vm.$nextTick(() => {
-              if(vm.search) vm.search_onchange();
-            });
+            console.info("Items loaded from cache");
             
-            // Always refresh quantities after items are loaded
+            // Even when loading from cache, refresh the quantities
             setTimeout(() => {
               if (vm.filtered_items && vm.filtered_items.length > 0) {
                 vm.update_items_details(vm.filtered_items);
               }
             }, 300);
-            
-            if (
-              vm.pos_profile.posa_local_storage &&
-              !vm.pos_profile.pose_use_limit_search
-            ) {
-              localStorage.setItem("items_storage", "");
-              try {
-                localStorage.setItem(
-                  "items_storage",
-                  JSON.stringify(r.message)
-                );
-              } catch (e) {
-                console.error(e);
-              }
-            }
-            if (vm.pos_profile.pose_use_limit_search) {
-              vm.enter_event();
-            }
+            return;
           }
-        },
-      });
+        } catch (error) {
+          console.error("Error loading items from cache:", error);
+        }
+      }
+
+      // If online or no cached data, fetch from server
+      try {
+        const r = await frappe.call({
+          method: "posawesome.posawesome.api.posapp.get_items",
+          args: {
+            pos_profile: vm.pos_profile,
+            price_list: vm.customer_price_list,
+            item_group: gr,
+            search_value: sr,
+            customer: vm.customer,
+          }
+        });
+
+        if (r.message) {
+          vm.items = r.message;
+          vm.eventBus.emit("set_all_items", vm.items);
+          vm.loading = false;
+          vm.items_loaded = true;
+          console.info("Items Loaded from server");
+
+          // Cache items in IndexedDB
+          try {
+            await vm.$store.dispatch('indexedDB/cacheItems', r.message);
+            console.info("Items cached successfully");
+          } catch (error) {
+            console.error("Error caching items:", error);
+          }
+
+          vm.$nextTick(() => {
+            if(vm.search) vm.search_onchange();
+          });
+          
+          // Always refresh quantities after items are loaded
+          setTimeout(() => {
+            if (vm.filtered_items && vm.filtered_items.length > 0) {
+              vm.update_items_details(vm.filtered_items);
+            }
+          }, 300);
+          
+          if (vm.pos_profile.pose_use_limit_search) {
+            vm.enter_event();
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching items:", error);
+        vm.loading = false;
+        
+        // If error and offline, try to use cached data again
+        if (navigator.onLine === false) {
+          try {
+            const cachedItems = await vm.$store.dispatch('indexedDB/getCachedItems');
+            if (cachedItems && cachedItems.length > 0) {
+              vm.items = cachedItems;
+              vm.eventBus.emit("set_all_items", vm.items);
+              vm.items_loaded = true;
+              console.info("Items loaded from cache after error");
+            }
+          } catch (cacheError) {
+            console.error("Error loading items from cache after fetch error:", cacheError);
+          }
+        }
+      }
     },
     get_items_groups() {
       if (!this.pos_profile) {
@@ -469,7 +492,7 @@ export default {
       this.qty = 1;
       this.$refs.debounce_search.focus();
     },
-    update_items_details(items) {
+    async update_items_details(items) {
       const vm = this;
       if (!items || !items.length) return;
 
@@ -480,72 +503,137 @@ export default {
       }
 
       vm.abortController = new AbortController();
-      
-      vm.currentRequest = frappe.call({
-        method: "posawesome.posawesome.api.posapp.get_items_details",
-        args: {
-          pos_profile: vm.pos_profile,
-          items_data: items,
-        },
-        freeze: true,
-        signal: vm.abortController.signal,
-        callback: function(r) {
-          if (r.message) {
-            let qtyChanged = false;
-            
+
+      // First try to get cached items details if offline
+      if (navigator.onLine === false) {
+        try {
+          const cachedItems = await this.$store.dispatch('indexedDB/getCachedItems');
+          if (cachedItems && cachedItems.length > 0) {
             items.forEach((item) => {
-              const updated_item = r.message.find(
-                (element) => element.item_code == item.item_code
+              const cachedItem = cachedItems.find(
+                (cached) => cached.item_code === item.item_code
               );
-              if (updated_item) {
-                // Save previous quantity for comparison
-                const prev_qty = item.actual_qty;
-                
-                item.actual_qty = updated_item.actual_qty;
-                item.serial_no_data = updated_item.serial_no_data;
-                item.batch_no_data = updated_item.batch_no_data;
-                
-                // Properly handle UOMs data
-                if (updated_item.item_uoms && updated_item.item_uoms.length > 0) {
-                  item.item_uoms = updated_item.item_uoms;
-                } else if (!item.item_uoms || !item.item_uoms.length) {
-                  // If no UOMs found, at least add the stock UOM
-                  item.item_uoms = [{ uom: item.stock_uom, conversion_factor: 1.0 }];
-                }
-                
-                item.has_batch_no = updated_item.has_batch_no;
-                item.has_serial_no = updated_item.has_serial_no;
-                
-                // Log and track significant quantity changes
-                if (prev_qty > 0 && item.actual_qty === 0) {
-                  console.log(`Item ${item.item_code} quantity changed from ${prev_qty} to 0`);
-                  qtyChanged = true;
+              if (cachedItem) {
+                item.actual_qty = cachedItem.actual_qty;
+                item.serial_no_data = cachedItem.serial_no_data;
+                item.batch_no_data = cachedItem.batch_no_data;
+                item.has_batch_no = cachedItem.has_batch_no;
+                item.has_serial_no = cachedItem.has_serial_no;
+                if (cachedItem.item_uoms && cachedItem.item_uoms.length > 0) {
+                  item.item_uoms = cachedItem.item_uoms;
                 }
               }
             });
+            return;
+          }
+        } catch (error) {
+          console.error("Error getting cached items details:", error);
+        }
+      }
+      
+      // If online or no cached data, fetch from server
+      try {
+        const response = await frappe.call({
+          method: "posawesome.posawesome.api.posapp.get_items_details",
+          args: {
+            pos_profile: vm.pos_profile,
+            items_data: items
+          },
+          freeze: true,
+          signal: vm.abortController.signal
+        });
+
+        if (response.message) {
+          let qtyChanged = false;
+          
+          items.forEach((item) => {
+            const updated_item = response.message.find(
+              (element) => element.item_code == item.item_code
+            );
+            if (updated_item) {
+              // Save previous quantity for comparison
+              const prev_qty = item.actual_qty;
+              
+              item.actual_qty = updated_item.actual_qty;
+              item.serial_no_data = updated_item.serial_no_data;
+              item.batch_no_data = updated_item.batch_no_data;
+              
+              // Properly handle UOMs data
+              if (updated_item.item_uoms && updated_item.item_uoms.length > 0) {
+                item.item_uoms = updated_item.item_uoms;
+              } else if (!item.item_uoms || !item.item_uoms.length) {
+                item.item_uoms = [{ uom: item.stock_uom, conversion_factor: 1.0 }];
+              }
+              
+              item.has_batch_no = updated_item.has_batch_no;
+              item.has_serial_no = updated_item.has_serial_no;
+              
+              if (prev_qty > 0 && item.actual_qty === 0) {
+                console.log(`Item ${item.item_code} quantity changed from ${prev_qty} to 0`);
+                qtyChanged = true;
+              }
+            }
+          });
+
+          // Update cache with new quantities
+          try {
+            const allCachedItems = await vm.$store.dispatch('indexedDB/getCachedItems');
+            const updatedCachedItems = allCachedItems.map(cachedItem => {
+              const updatedItem = items.find(item => item.item_code === cachedItem.item_code);
+              if (updatedItem) {
+                return {
+                  ...cachedItem,
+                  actual_qty: updatedItem.actual_qty,
+                  serial_no_data: updatedItem.serial_no_data,
+                  batch_no_data: updatedItem.batch_no_data,
+                  has_batch_no: updatedItem.has_batch_no,
+                  has_serial_no: updatedItem.has_serial_no,
+                  item_uoms: updatedItem.item_uoms
+                };
+              }
+              return cachedItem;
+            });
             
-            // Force update if any item's quantity changed significantly
-            if (qtyChanged) {
-              vm.$forceUpdate();
+            await vm.$store.dispatch('indexedDB/cacheItems', updatedCachedItems);
+          } catch (error) {
+            console.error("Error updating cache with new quantities:", error);
+          }
+          
+          // Force update if any item's quantity changed significantly
+          if (qtyChanged) {
+            vm.$forceUpdate();
+          }
+        }
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          console.error("Error fetching item details:", error);
+          // If error and offline, try to use cached data
+          if (navigator.onLine === false) {
+            try {
+              const cachedItems = await vm.$store.dispatch('indexedDB/getCachedItems');
+              if (cachedItems && cachedItems.length > 0) {
+                items.forEach((item) => {
+                  const cachedItem = cachedItems.find(
+                    (cached) => cached.item_code === item.item_code
+                  );
+                  if (cachedItem) {
+                    item.actual_qty = cachedItem.actual_qty;
+                    item.serial_no_data = cachedItem.serial_no_data;
+                    item.batch_no_data = cachedItem.batch_no_data;
+                    item.has_batch_no = cachedItem.has_batch_no;
+                    item.has_serial_no = cachedItem.has_serial_no;
+                    if (cachedItem.item_uoms && cachedItem.item_uoms.length > 0) {
+                      item.item_uoms = cachedItem.item_uoms;
+                    }
+                  }
+                });
+              }
+            } catch (cacheError) {
+              console.error("Error getting cached items details after fetch error:", cacheError);
             }
           }
-        },
-        error: function(err) {
-          if (err.name !== 'AbortError') {
-            console.error("Error fetching item details:", err);
-            setTimeout(() => {
-              vm.update_items_details(items);
-            }, 1000);
-          }
         }
-      });
-      
-      // Cleanup on component destroy
-      this.cleanupBeforeDestroy = () => {
-        if (vm.abortController) {
-          vm.abortController.abort();
-        }
-      };
+      }
     },
     update_cur_items_details() {
       if (this.filtered_items && this.filtered_items.length > 0) {
