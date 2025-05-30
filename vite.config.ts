@@ -16,8 +16,7 @@ export default defineConfig({
           name?.endsWith('.css') ? 'index.css' : '[name]'
       }
     }
-  }
-  ,
+  },
   plugins: [
     vue(),
     VitePWA({
@@ -28,13 +27,14 @@ export default defineConfig({
       manifest: {
         name: 'POSAwesome',
         short_name: 'POS',
-        start_url: '/app/posapp/',          // relative start
+        start_url: '/app/posapp/',
+        scope: '/app/posapp/',
         display: 'standalone',
         background_color: '#ffffff',
         theme_color: '#1E88E5',
         icons: [
-          { src: 'icons/pwa-192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'icons/pwa-512.png', sizes: '512x512', type: 'image/png' }
+          { src: '/app/posapp/icons/pwa-192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/app/posapp/icons/pwa-512.png', sizes: '512x512', type: 'image/png' }
         ]
       },
       workbox: {
