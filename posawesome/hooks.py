@@ -20,6 +20,11 @@ app_license = "GPLv3"
 app_include_js = [
     "posawesome.bundle.js",
 ]
+app_include_js  = ["/assets/posawesome/index-BLXyxXoN.js"]
+app_include_css =  "/assets/posawesome/index-D4-kQKXm.css"
+
+# head custom HTML
+app_include_html = "/assets/posawesome/include_manifest.html"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/posawesome/css/posawesome.css"
