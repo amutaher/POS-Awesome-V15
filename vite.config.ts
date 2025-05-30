@@ -78,6 +78,20 @@ export default defineConfig({
               }
             }
           },
+          /* Opening Shift Data Caching */
+          {
+            urlPattern: ({url}) =>
+              url.origin === self.location.origin &&
+              (url.pathname.includes('/api/method/posawesome.posawesome.api.check_opening_shift') ||
+               url.pathname.includes('/api/method/posawesome.posawesome.api.create_opening_voucher')),
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'opening-shift-data',
+              expiration: {
+                maxAgeSeconds: 24 * 60 * 60 // 24 hours
+              }
+            }
+          },
           /* Invoice POST queue – current origin only */
           {
             urlPattern: ({url, request}) =>

@@ -75,24 +75,53 @@ export default {
   },
 
   methods: {
-    check_opening_entry() {
-      return frappe
-        .call('posawesome.posawesome.api.posapp.check_opening_shift', {
+    async check_opening_entry() {
+      try {
+        // First try to get cached opening shift data
+        const cachedShift = await this.$store.dispatch('indexedDB/getCachedOpeningShift');
+        if (cachedShift && navigator.onLine === false) {
+          this.pos_profile = cachedShift.pos_profile;
+          this.pos_opening_shift = cachedShift.pos_opening_shift;
+          this.get_offers(this.pos_profile.name);
+          this.eventBus.emit('register_pos_profile', cachedShift);
+          this.eventBus.emit('set_company', cachedShift.company);
+          return;
+        }
+
+        // If no cached data or online, fetch from server
+        const r = await frappe.call('posawesome.posawesome.api.posapp.check_opening_shift', {
           user: frappe.session.user,
-        })
-        .then((r) => {
-          if (r.message) {
-            this.pos_profile = r.message.pos_profile;
-            this.pos_opening_shift = r.message.pos_opening_shift;
-            this.get_offers(this.pos_profile.name);
-            this.eventBus.emit('register_pos_profile', r.message);
-            this.eventBus.emit('set_company', r.message.company);
-            frappe.realtime.emit('pos_profile_registered');
-            console.info('LoadPosProfile');
-          } else {
-            this.create_opening_voucher();
-          }
         });
+
+        if (r.message) {
+          this.pos_profile = r.message.pos_profile;
+          this.pos_opening_shift = r.message.pos_opening_shift;
+          this.get_offers(this.pos_profile.name);
+          this.eventBus.emit('register_pos_profile', r.message);
+          this.eventBus.emit('set_company', r.message.company);
+          frappe.realtime.emit('pos_profile_registered');
+          
+          // Cache the opening shift data
+          await this.$store.dispatch('indexedDB/cacheOpeningShift', r.message);
+          
+          console.info('LoadPosProfile');
+        } else {
+          this.create_opening_voucher();
+        }
+      } catch (error) {
+        console.error('Error in check_opening_entry:', error);
+        // If error and offline, try to use cached data
+        if (navigator.onLine === false) {
+          const cachedShift = await this.$store.dispatch('indexedDB/getCachedOpeningShift');
+          if (cachedShift) {
+            this.pos_profile = cachedShift.pos_profile;
+            this.pos_opening_shift = cachedShift.pos_opening_shift;
+            this.get_offers(this.pos_profile.name);
+            this.eventBus.emit('register_pos_profile', cachedShift);
+            this.eventBus.emit('set_company', cachedShift.company);
+          }
+        }
+      }
     },
     create_opening_voucher() {
       this.dialog = true;

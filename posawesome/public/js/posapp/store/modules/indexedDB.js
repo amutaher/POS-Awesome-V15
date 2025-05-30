@@ -16,6 +16,9 @@ async function initDB() {
       if (!db.objectStoreNames.contains('customers-cache')) {
         db.createObjectStore('customers-cache', { keyPath: 'name' });
       }
+      if (!db.objectStoreNames.contains('opening-shift-cache')) {
+        db.createObjectStore('opening-shift-cache', { keyPath: 'name' });
+      }
     },
   });
 }
@@ -76,6 +79,19 @@ export const indexedDB = {
       if (!state.isInitialized) return [];
       const tx = state.db.transaction('customers-cache', 'readonly');
       return await tx.store.getAll();
+    },
+
+    async cacheOpeningShift({ state }, shiftData) {
+      if (!state.isInitialized) return;
+      const tx = state.db.transaction('opening-shift-cache', 'readwrite');
+      await tx.store.put(shiftData);
+    },
+
+    async getCachedOpeningShift({ state }) {
+      if (!state.isInitialized) return null;
+      const tx = state.db.transaction('opening-shift-cache', 'readonly');
+      const shifts = await tx.store.getAll();
+      return shifts.length > 0 ? shifts[0] : null;
     }
   }
 }; 
