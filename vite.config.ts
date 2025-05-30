@@ -58,32 +58,63 @@ export default defineConfig({
                 url.pathname.startsWith('/assets/posawesome/') ||
                 url.pathname.startsWith('/app/pos') ||
                 url.pathname === '/' ||
-                url.pathname.includes('.html')
+                url.pathname.includes('.html') ||
+                url.pathname.includes('ERR_INTERNET_DISCONNECTED')
               );
             },
-            handler: 'NetworkFirst',
+            handler: 'CacheFirst',
             options: {
               cacheName: 'pos-html-assets',
               expiration: {
                 maxAgeSeconds: 24 * 60 * 60 // 24 hours
               },
-              networkTimeoutSeconds: 10
+              cacheableResponse: {
+                statuses: [0, 200]
+              }
+            }
+          },
+          /* Frappe Core Assets */
+          {
+            urlPattern: ({url}) => {
+              return (
+                url.pathname.startsWith('/assets/frappe/') ||
+                url.pathname.startsWith('/assets/js/') ||
+                url.pathname.startsWith('/assets/css/')
+              );
+            },
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'frappe-core-assets',
+              expiration: {
+                maxAgeSeconds: 24 * 60 * 60 // 24 hours
+              }
             }
           },
           /* static assets */
           {
             urlPattern: ({request}) =>
-              ['script', 'style'].includes(request.destination),
+              ['script', 'style', 'image', 'font'].includes(request.destination),
             handler: 'CacheFirst',
-            options: { cacheName: 'static-v1' }
+            options: { 
+              cacheName: 'static-v1',
+              expiration: {
+                maxAgeSeconds: 24 * 60 * 60 // 24 hours
+              }
+            }
           },
           /* ERPNext GET APIs – current origin only */
           {
             urlPattern: ({url}) =>
               url.origin === self.location.origin &&
               url.pathname.startsWith('/api/resource/'),
-            handler: 'StaleWhileRevalidate',
-            options: { cacheName: 'erp-api' }
+            handler: 'NetworkFirst',
+            options: { 
+              cacheName: 'erp-api',
+              networkTimeoutSeconds: 3,
+              expiration: {
+                maxAgeSeconds: 24 * 60 * 60 // 24 hours
+              }
+            }
           },
           /* POS Data Caching */
           {
@@ -92,11 +123,15 @@ export default defineConfig({
               (url.pathname.includes('/api/method/posawesome.posawesome.api') ||
                url.pathname.includes('/api/method/posawesome.posawesome.api.get_items') ||
                url.pathname.includes('/api/method/posawesome.posawesome.api.get_customers')),
-            handler: 'StaleWhileRevalidate',
+            handler: 'NetworkFirst',
             options: { 
               cacheName: 'pos-data',
+              networkTimeoutSeconds: 3,
               expiration: {
                 maxAgeSeconds: 24 * 60 * 60 // 24 hours
+              },
+              cacheableResponse: {
+                statuses: [0, 200]
               }
             }
           },
@@ -106,11 +141,15 @@ export default defineConfig({
               url.origin === self.location.origin &&
               (url.pathname.includes('/api/method/posawesome.posawesome.api.check_opening_shift') ||
                url.pathname.includes('/api/method/posawesome.posawesome.api.create_opening_voucher')),
-            handler: 'StaleWhileRevalidate',
+            handler: 'NetworkFirst',
             options: {
               cacheName: 'opening-shift-data',
+              networkTimeoutSeconds: 3,
               expiration: {
                 maxAgeSeconds: 24 * 60 * 60 // 24 hours
+              },
+              cacheableResponse: {
+                statuses: [0, 200]
               }
             }
           },
