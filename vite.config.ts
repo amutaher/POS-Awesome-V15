@@ -13,6 +13,7 @@ export default defineConfig({
   plugins: [
     vue(),
     VitePWA({
+      injectRegister: 'auto',
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'logo.png'],
       manifest: {
