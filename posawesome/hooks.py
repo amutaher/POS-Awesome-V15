@@ -63,6 +63,9 @@ doctype_js = {
 # website_generators = ["Web Page"]
 
 # Installation
+
+after_install = "posawesome.install.run_pwa_build"
+after_migrate = "posawesome.install.run_pwa_build"
 # ------------
 
 # before_install = "posawesome.install.before_install"

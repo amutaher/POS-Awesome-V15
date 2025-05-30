@@ -4,8 +4,12 @@ import vue from '@vitejs/plugin-vue'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  root:  resolve(__dirname, 'public', 'js', 'posapp'),
   base: '/app/posapp/',
-  root: resolve(__dirname, 'public', 'js', 'posapp'),
+  build: {
+    outDir: resolve(__dirname,
+      '..', '..', 'sites', 'assets', 'posawesome')
+  },
   plugins: [
     vue(),
     VitePWA({
