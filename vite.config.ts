@@ -28,26 +28,48 @@ export default defineConfig({
       manifest: {
         name: 'POSAwesome',
         short_name: 'POS',
-        start_url: '/assets/posawesome/',
-        scope: '/assets/posawesome/',
+        start_url: '/app/pos',
+        scope: '/',
         display: 'standalone',
         background_color: '#ffffff',
         theme_color: '#1E88E5',
+        description: 'POS Awesome - Point of Sale System',
         icons: [
           { 
             src: '/assets/posawesome/icons/pwa-192.png',
             sizes: '192x192',
-            type: 'image/png'
+            type: 'image/png',
+            purpose: 'any maskable'
           },
           {
             src: '/assets/posawesome/icons/pwa-512.png',
             sizes: '512x512',
-            type: 'image/png'
+            type: 'image/png',
+            purpose: 'any maskable'
           }
         ]
       },
       workbox: {
         runtimeCaching: [
+          /* HTML and Assets Caching */
+          {
+            urlPattern: ({url}) => {
+              return (
+                url.pathname.startsWith('/assets/posawesome/') ||
+                url.pathname.startsWith('/app/pos') ||
+                url.pathname === '/' ||
+                url.pathname.includes('.html')
+              );
+            },
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'pos-html-assets',
+              expiration: {
+                maxAgeSeconds: 24 * 60 * 60 // 24 hours
+              },
+              networkTimeoutSeconds: 10
+            }
+          },
           /* static assets */
           {
             urlPattern: ({request}) =>
@@ -106,7 +128,10 @@ export default defineConfig({
               }
             }
           }
-        ]
+        ],
+        navigationPreload: true,
+        skipWaiting: true,
+        clientsClaim: true
       }
     })
   ]
