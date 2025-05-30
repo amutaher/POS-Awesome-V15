@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import { resolve } from 'path'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
@@ -5,7 +6,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
   root: resolve(__dirname, 'posawesome', 'public', 'js', 'posapp'),
-  base: '/app/posapp/',
+  base: '/assets/posawesome/',
   build: {
     outDir: resolve(__dirname, '..', '..', 'sites', 'assets', 'posawesome'),
     rollupOptions: {
@@ -21,20 +22,28 @@ export default defineConfig({
     vue(),
     VitePWA({
       injectRegister: 'auto',
-      devOptions: { enabled: false },
+      devOptions: { enabled: true },
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'logo.png'],
       manifest: {
         name: 'POSAwesome',
         short_name: 'POS',
-        start_url: '/app/posapp/',
-        scope: '/app/posapp/',
+        start_url: '/assets/posawesome/',
+        scope: '/assets/posawesome/',
         display: 'standalone',
         background_color: '#ffffff',
         theme_color: '#1E88E5',
         icons: [
-          { src: '/app/posapp/icons/pwa-192.png', sizes: '192x192', type: 'image/png' },
-          { src: '/app/posapp/icons/pwa-512.png', sizes: '512x512', type: 'image/png' }
+          { 
+            src: '/assets/posawesome/icons/pwa-192.png',
+            sizes: '192x192',
+            type: 'image/png'
+          },
+          {
+            src: '/assets/posawesome/icons/pwa-512.png',
+            sizes: '512x512',
+            type: 'image/png'
+          }
         ]
       },
       workbox: {
