@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 from . import __version__ as app_version
+from glob import glob
+import os
 
 app_name = "posawesome"
 app_title = "POS Awesome"
@@ -20,10 +22,15 @@ app_license = "GPLv3"
 app_include_js = [
     "posawesome.bundle.js",
 ]
-app_include_js  = ["/assets/posawesome/index-BLXyxXoN.js"]
-app_include_css =  "/assets/posawesome/index-D4-kQKXm.css"
+assets_path = os.path.join(
+    os.path.dirname(__file__), '..', '..', 'sites', 'assets', 'posawesome')
 
-# head custom HTML
+def _latest(pattern):
+    files = sorted(glob(os.path.join(assets_path, pattern)))
+    return '/assets/posawesome/' + os.path.basename(files[-1]) if files else ''
+
+app_include_js  = _latest('index-*.js')
+app_include_css = _latest('index-*.css')
 app_include_html = "/assets/posawesome/include_manifest.html"
 
 # include js, css files in header of web template
