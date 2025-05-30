@@ -64,8 +64,8 @@ doctype_js = {
 
 # Installation
 
-after_install = "posawesome.install.run_pwa_build"
-after_migrate = "posawesome.install.run_pwa_build"
+after_install  = "posawesome.patches.build_pwa.build"
+after_migrate  = "posawesome.patches.build_pwa.build"
 # ------------
 
 # before_install = "posawesome.install.before_install"
