@@ -58,10 +58,25 @@ export default defineConfig({
           /* ERPNext GET APIs – current origin only */
           {
             urlPattern: ({url}) =>
-              url.origin === self.location.origin &&            // ⚡ dynamic
+              url.origin === self.location.origin &&
               url.pathname.startsWith('/api/resource/'),
             handler: 'StaleWhileRevalidate',
             options: { cacheName: 'erp-api' }
+          },
+          /* POS Data Caching */
+          {
+            urlPattern: ({url}) =>
+              url.origin === self.location.origin &&
+              (url.pathname.includes('/api/method/posawesome.posawesome.api') ||
+               url.pathname.includes('/api/method/posawesome.posawesome.api.get_items') ||
+               url.pathname.includes('/api/method/posawesome.posawesome.api.get_customers')),
+            handler: 'StaleWhileRevalidate',
+            options: { 
+              cacheName: 'pos-data',
+              expiration: {
+                maxAgeSeconds: 24 * 60 * 60 // 24 hours
+              }
+            }
           },
           /* Invoice POST queue – current origin only */
           {
