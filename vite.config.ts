@@ -7,9 +7,17 @@ export default defineConfig({
   root: resolve(__dirname, 'posawesome', 'public', 'js', 'posapp'),
   base: '/app/posapp/',
   build: {
-    outDir: resolve(__dirname,
-      '..', '..', 'sites', 'assets', 'posawesome')
-  },
+    outDir: resolve(__dirname, '..', '..', 'sites', 'assets', 'posawesome'),
+    rollupOptions: {
+      output: {
+        entryFileNames: 'index.js',
+        chunkFileNames: 'index-[name].js',
+        assetFileNames: ({name}) =>
+          name?.endsWith('.css') ? 'index.css' : '[name]'
+      }
+    }
+  }
+  ,
   plugins: [
     vue(),
     VitePWA({
